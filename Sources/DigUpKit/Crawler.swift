@@ -81,6 +81,10 @@ public enum Crawler {
                 case .skip(let reason):
                     report.skipped[reason, default: 0] += 1
                 case .index(let kind):
+                    if options.richContentOnly, !SemanticPolicy.embeds(kind) {
+                        report.skipped["searched by Spotlight", default: 0] += 1
+                        return
+                    }
                     guard let info = FileSystem.info(of: url.path), info.isRegular else {
                         report.skipped["link or special file", default: 0] += 1
                         return

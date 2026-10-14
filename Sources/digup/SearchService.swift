@@ -145,17 +145,21 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
                 }
             }
             let embedded = Date()
+            // The crawler keeps real paths, while shell requests can use /tmp, /var or a symlinked folder.
+            // Match both spellings, including exclusions, without changing the roots shown in summaries.
+            let searchRoots = Self.pathSpellings(code ? codeRoots : roots)
+            let searchSkipped = Self.pathSpellings(code ? codeSkipped : skipped)
             let hits: [SearchHit]
             if code {
                 guard let codeSearcher else { return ["hits": [], "strong": 0, "meaning": false] }
                 hits = try codeSearcher.search(text, queryVector: vector, limit: limit, prefixLast: prefixLast).filter {
-                    FolderSelection.isSearched($0.path, folders: codeRoots, skipped: codeSkipped)
+                    FolderSelection.isSearched($0.path, folders: searchRoots, skipped: searchSkipped)
                         && FileManager.default.fileExists(atPath: $0.path)
                 }
             } else {
                 hits = try searcher.search(text, queryVector: vector, kinds: kinds, limit: limit, prefixLast: prefixLast)
                     .filter {
-                        (roots.isEmpty || FolderSelection.isSearched($0.path, folders: roots, skipped: skipped))
+                        (roots.isEmpty || FolderSelection.isSearched($0.path, folders: searchRoots, skipped: searchSkipped))
                             && !types.contains(($0.path as NSString).pathExtension.lowercased())
                             && FileManager.default.fileExists(atPath: $0.path)
                     }
@@ -228,6 +232,11 @@ final class SearchService: @unchecked Sendable {   // its state is guarded by `l
 
     private func write(_ fields: [String: Any]) {
         output.withLock { emit(fields) }
+    }
+
+    private static func pathSpellings(_ paths: [String]) -> [String] {
+        var seen = Set<String>()
+        return paths.flatMap { [$0, FolderSelection.realPath($0)] }.filter { seen.insert($0).inserted }
     }
 
     /// What's indexed under one folder, as the Mac app's `Engine.rootSummaries` counts it: its files by state and kind.

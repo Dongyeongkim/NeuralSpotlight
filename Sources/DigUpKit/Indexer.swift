@@ -44,8 +44,8 @@ public final class Indexer {
     /// version may bring a new model), and this hears about it. When nil, indexing stops with `fingerprintMismatch`.
     public var resetOnModelChange: ((_ indexed: String, _ now: String) -> Void)?
 
-    /// The vector source of the embedders `makeEmbedder` makes, when it's known without starting one (llama.cpp's is):
-    /// then `checkModel()` can notice a new model before anything needs embedding.
+    /// The vector source of the embedders `makeEmbedder` makes, when known without loading one. `checkModel()` notices
+    /// changes before any file needs embedding, but validates the replacement runtime before discarding vectors.
     public var embedderSource: String?
     /// The index folder, where what indexing costs on this Mac is kept (`MeasuredCosts`) for estimates. Unset: nothing
     /// is kept.
@@ -175,10 +175,11 @@ public final class Indexer {
     /// first) loses nothing, and the next pass goes on from there. It runs once nothing is pending: a book's last
     /// pages matter less than everything else's first ones, and they take a while (0.04–0.2 s a page, 2026-10-09).
     @discardableResult
-    public func finishLongFiles(shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
+    public func finishLongFiles(only ids: Set<Int64>? = nil, shouldStop: () -> Bool = { false }, onStep: (Step) -> Void = { _ in }) throws
         -> [String: Int] {
         var jobs: [Job] = []
         for file in try store.unfinished() {
+            if let ids, !ids.contains(file.id) { continue }
             let info = try store.info(of: file.id)
             let size = file.kind == .pdf ? options.pdfStep : options.docStep
             // Where it stopped (after the last page or chunk stored, should its info not say; nothing stored: the start).
@@ -290,12 +291,16 @@ public final class Indexer {
         return batches
     }
 
-    /// Compares the index with the current model and settings (`embedderSource`), without starting the model; a
-    /// change empties the index (see `resetOnModelChange`) or throws `fingerprintMismatch`. Without a known source the
-    /// check waits for the first file to embed.
+    /// Compares the index with the current model and settings (`embedderSource`). An automatic rebuild first loads
+    /// and validates the replacement runtime; missing/corrupt replacement assets leave the existing index intact.
     public func checkModel() throws {
         guard let embedderSource else { return }
-        try adopt("\(embedderSource) | \(options.fingerprint)")
+        let fingerprint = "\(embedderSource) | \(options.fingerprint)"
+        guard let indexed = try store.meta("fingerprint"), indexed != fingerprint else { return }
+        guard resetOnModelChange != nil else {
+            throw IndexerError.fingerprintMismatch(index: indexed, now: fingerprint)
+        }
+        _ = try fullWorker() // load/checksum verification succeeds before adopt resets the old index
     }
 
     private func adopt(_ fingerprint: String) throws {
@@ -407,6 +412,8 @@ public final class Indexer {
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             switch batch[0].kind {
+            case .file, .folder, .application:
+                for slot in batch.indices { prepared.outcomes[slot] = Outcome(state: "done", detail: nil) }
             case .image, .screenshot:
                 let screenshot = batch[0].kind == .screenshot
                 var ready: [ReadyImage] = []

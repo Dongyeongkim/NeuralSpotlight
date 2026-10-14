@@ -1,4 +1,5 @@
 import AppKit
+import DigUpKit
 import Observation
 
 /// State the menubar, the panel and the windows share. Engine updates arrive on the main thread.
@@ -8,7 +9,7 @@ final class AppModel {
     var settings: AppSettings
     var hotkey: KeyCombo?
     let download: ModelDownload
-    /// A newer DigUp the daily check found ("0.6.1"), until you open it (`Updates`).
+    /// A newer NeuralSpotlight the daily check found ("0.6.1"), until you open it (`Updates`).
     var updateAvailable: String?
 
     init(settings: AppSettings, download: ModelDownload) {
@@ -28,18 +29,16 @@ final class AppModel {
         case .starting: return "Starting…"
         case .failed(let problem): return "⚠︎ \(problem)"
         case .syncing: return "Checking folders…"
-        case .indexing(let done, let total):
-            let percent = total > 0 ? Int((Double(done) / Double(total) * 100).rounded(.down)) : 0
-            return "Indexing \(percent)% · \(done.formatted()) of \(total.formatted())"
+        case .indexing:
+            return indexingLine(status.indexingProgress)
         case .finishing(let done, let total, let files):
             let percent = total > 0 ? Int((Double(done) / Double(total) * 100).rounded(.down)) : 0
             let which = files > 0 ? "\(files.formatted()) long \(files == 1 ? "file" : "files")" : "long files"
             return "Reading the rest of \(which) · \(percent)%"
         case .idle:
             if let line = downloadLine { return line }
-            if let code = status.code.indexing, code.total > 0 {
-                let percent = Int((Double(code.done) / Double(code.total) * 100).rounded(.down))
-                return "Indexing code \(percent)% · \(code.done.formatted()) of \(code.total.formatted())"
+            if status.code.indexing != nil {
+                return indexingLine(status.code.indexingProgress, code: true)
             }
             let waiting = "\(status.pending.formatted()) \(status.pending == 1 ? "file" : "files") waiting"
             if status.pending > 0, status.paused { return "Paused · \(waiting)" }
@@ -57,6 +56,7 @@ final class AppModel {
                 if let reason = status.waitingFor { return "\(rest) · \(reason)" }
             }
             return "\(status.searchable.formatted()) \(status.searchable == 1 ? "file" : "files") indexed"
+                + issuesSummary(failed: status.failed, skipped: status.skipped)
                 + (status.paused ? " · paused" : "")
         }
     }
@@ -73,15 +73,14 @@ final class AppModel {
         }
     }
 
-    /// 0…1 for the menubar ring and progress bars: the model download, then an indexing pass or the rest of long files.
+    /// 0…1 for the menubar ring and progress bars: download, the whole collection, or the rest of long files.
     var progress: Double? {
         if download.isActive { return download.fraction }
         switch status.activity {
-        case .indexing(let done, let total) where total > 0: return Double(done) / Double(total)
+        case .indexing: return status.indexingProgress.fraction
         case .finishing(let done, let total, _) where total > 0: return Double(done) / Double(total)
         case .idle:
-            guard let code = status.code.indexing, code.total > 0 else { return nil }
-            return Double(code.done) / Double(code.total)
+            return status.code.indexing != nil ? status.code.indexingProgress.fraction : nil
         default: return nil
         }
     }
@@ -91,9 +90,8 @@ final class AppModel {
         let code = status.code
         guard hasCode else { return "Code search is off" }
         if !download.isReady { return "Code is read once the model has downloaded" }
-        if let indexing = code.indexing, indexing.total > 0 {
-            let percent = Int((Double(indexing.done) / Double(indexing.total) * 100).rounded(.down))
-            return "Indexing code \(percent)% · \(indexing.done.formatted()) of \(indexing.total.formatted())"
+        if code.indexing != nil {
+            return indexingLine(code.indexingProgress, code: true)
         }
         let waiting = code.pending > 0 ? " · \(code.pending.formatted()) waiting" : ""
         if code.pending > 0, status.paused { return "Paused · \(code.pending.formatted()) code files waiting" }
@@ -108,13 +106,17 @@ final class AppModel {
             return files + " waiting · read after your other files"
         }
         return "\(code.searchable.formatted()) code \(code.searchable == 1 ? "file" : "files") indexed" + waiting
+            + issuesSummary(failed: code.failed, skipped: code.skipped)
     }
 
     /// A few words for the search bar while results may be incomplete: "Indexing 42%", "Downloading model · 42%".
     var activityBadge: String? {
         if download.isActive { return "Downloading model · \(Int(download.fraction * 100))%" }
-        if case .indexing(let done, let total) = status.activity, total > 0 {
-            return "Indexing \(Int(Double(done) / Double(total) * 100))%"
+        if case .indexing = status.activity {
+            return status.indexingProgress.percent.map { "Indexing \($0)%" } ?? "Indexing…"
+        }
+        if status.code.indexing != nil {
+            return status.code.indexingProgress.percent.map { "Indexing code \($0)%" } ?? "Indexing code…"
         }
         if status.paused, status.pending > 0 { return "Indexing paused" }
         return nil
@@ -132,12 +134,26 @@ final class AppModel {
     /// Why results may be incomplete right now, or nil.
     var resultsCaveat: String? {
         if let meaningUnavailable { return meaningUnavailable }
-        if case .indexing(let done, let total) = status.activity, total > 0 {
-            return "Still indexing (\(Int(Double(done) / Double(total) * 100))%): some files aren't in yet"
+        if case .indexing = status.activity, let percent = status.indexingProgress.percent {
+            return "Still indexing (\(percent)%): some files aren't in meaning search yet"
         }
         if status.pending > 0 {
             return "\(status.pending.formatted()) \(status.pending == 1 ? "file isn't" : "files aren't") indexed yet"
         }
+        if status.failed > 0 {
+            return "\(status.failed.formatted()) \(status.failed == 1 ? "file couldn't" : "files couldn't") be indexed"
+        }
         return nil
+    }
+
+    private func indexingLine(_ progress: IndexingProgress, code: Bool = false) -> String {
+        let label = code ? "Indexing code" : "Indexing"
+        guard let percent = progress.percent else { return "\(label)…" }
+        return "\(label) \(percent)% · \(progress.processed.formatted()) of \(progress.files.formatted()) processed"
+    }
+
+    private func issuesSummary(failed: Int, skipped: Int) -> String {
+        (failed > 0 ? " · \(failed.formatted()) couldn't be indexed" : "")
+            + (skipped > 0 ? " · \(skipped.formatted()) skipped" : "")
     }
 }

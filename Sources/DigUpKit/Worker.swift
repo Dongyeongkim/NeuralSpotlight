@@ -25,7 +25,7 @@ public struct WorkerInfo: Codable, Sendable {
     public var vectorSource: String { "\(model)@\(revision.prefix(7)) \(runtime) \(dtype)" }
 }
 
-/// The four calls every embedding runtime answers: the model linked into this process (llama.cpp, `LlamaRuntime`), or
+/// The four calls every embedding runtime answers: Core ML linked into this process, or
 /// a worker process speaking JSON lines (`EmbeddingWorker`: the mlx-vlm reference, or `digup worker`).
 /// One thread at a time.
 public protocol Embedder: AnyObject {
@@ -52,14 +52,18 @@ public struct WorkerConfig: Sendable {
         self.arguments = arguments
     }
 
-    /// The bundled helper (`digup worker`): EmbeddingGemma 2 on llama.cpp, what the app ships with.
+    /// The bundled helper (`digup worker`): the native Core ML runtime or an explicitly configured external worker.
     public static func helper(_ executable: URL) -> WorkerConfig {
         WorkerConfig(executable: executable, arguments: ["worker"])
     }
 
     /// The Python mlx-vlm worker in `folder` (the repo's `worker/`): the reference runtime for evals.
     public static func python(_ folder: URL) throws -> WorkerConfig {
+        #if os(Windows)
+        let python = folder.appendingPathComponent(".venv/Scripts/python.exe")
+        #else
         let python = folder.appendingPathComponent(".venv/bin/python")
+        #endif
         guard FileManager.default.isExecutableFile(atPath: python.path) else {
             throw WorkerError.notFound("worker environment missing; run: uv sync --project \(folder.path)")
         }

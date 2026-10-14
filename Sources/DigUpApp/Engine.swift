@@ -27,6 +27,8 @@ nonisolated struct EngineStatus: Sendable, Equatable {
     var files = 0        // in the index, any state
     var searchable = 0   // done or partial
     var pending = 0      // waiting to be embedded
+    var failed = 0       // attempted but couldn't be indexed
+    var skipped = 0      // deliberately left out of the meaning index
     var unfinished = 0   // long files with pages or chunks still to read (the backfill's rules hold them up too)
     var vectors = 0
     var paused = false
@@ -37,22 +39,28 @@ nonisolated struct EngineStatus: Sendable, Equatable {
     var waitingForModel = false
     /// Chosen folders that aren't there right now (an unplugged drive): skipped, and their files kept.
     var missingRoots: [String] = []
-    /// Chosen folders macOS doesn't let DigUp read (Privacy & Security → Files and Folders): skipped, files kept.
+    /// Chosen folders macOS doesn't let NeuralSpotlight read (Privacy & Security → Files and Folders): skipped, files kept.
     var unreadableRoots: [String] = []
     /// The code index, when code search is on.
     var code = Code()
+
+    var indexingProgress: IndexingProgress { .init(files: files, pending: pending) }
 
     struct Code: Sendable, Equatable {
         var files = 0
         var searchable = 0
         var pending = 0
+        var failed = 0
+        var skipped = 0
         var vectors = 0
         /// Files being read into the code index (`done` of `total`), or nil.
         var indexing: Progress?
         /// Code folders that aren't there right now (an unplugged drive): skipped, and their files kept.
         var missingRoots: [String] = []
-        /// Code folders macOS doesn't let DigUp read: skipped, files kept.
+        /// Code folders macOS doesn't let NeuralSpotlight read: skipped, files kept.
         var unreadableRoots: [String] = []
+
+        var indexingProgress: IndexingProgress { .init(files: files, pending: pending) }
     }
 
     struct Progress: Sendable, Equatable {
@@ -86,12 +94,13 @@ nonisolated final class Engine: @unchecked Sendable {
 
     let indexDirectory: URL
     let modelsDirectory: URL
+    private let embeddingBackend: EmbeddingBackend
     let encoderIdleSeconds: Double
-    private let indexQueue = DispatchQueue(label: "DigUp.index", qos: .utility)
-    private let searchQueue = DispatchQueue(label: "DigUp.search", qos: .userInitiated)
-    private let encoderQueue = DispatchQueue(label: "DigUp.encoder", qos: .userInitiated)
+    private let indexQueue = DispatchQueue(label: "NeuralSpotlight.index", qos: .utility)
+    private let searchQueue = DispatchQueue(label: "NeuralSpotlight.search", qos: .userInitiated)
+    private let encoderQueue = DispatchQueue(label: "NeuralSpotlight.encoder", qos: .userInitiated)
 
-    private let watchQueue = DispatchQueue(label: "DigUp.watch", qos: .utility)
+    private let watchQueue = DispatchQueue(label: "NeuralSpotlight.watch", qos: .utility)
 
     // indexQueue only
     private var helper: Process?
@@ -143,6 +152,8 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // searchQueue only
     private var searcher: Searcher?
+    private let localSearch = LocalSearchProvider() // localSearchQueue only
+    private let localSearchQueue = DispatchQueue(label: "NeuralSpotlight.local-search", qos: .userInitiated)
     private var searchStore: IndexStore?
     private var codeSearcher: Searcher?
     private var codeStore: IndexStore?
@@ -168,6 +179,7 @@ nonisolated final class Engine: @unchecked Sendable {
          onStatus: @escaping @MainActor @Sendable (EngineStatus) -> Void) {
         indexDirectory = settings.indexDirectory
         modelsDirectory = settings.modelsDirectory
+        embeddingBackend = settings.embeddingBackend
         encoderIdleSeconds = settings.encoderIdleSeconds
         roots = settings.roots
         excluded = settings.excludedFolders
@@ -207,11 +219,14 @@ nonisolated final class Engine: @unchecked Sendable {
     /// Opens the searcher first (creating the index if it's new), so a search asked for right after launch already
     /// finds it on its queue; then starts the indexing helper, which syncs with the folders.
     func start() {
+        prepareQueryEncoder()
         searchQueue.async { [self] in
             guard openSearcher() else {
                 update { $0.activity = .failed("Can't open the index") }
                 return
             }
+            let folders = lock.withLock { roots + codeRoots }
+            saveUses(SpotlightActivity.recent(roots: folders), source: "spotlight")
             indexQueue.async { [self] in startHelper() }
         }
         watchQueue.async { [self] in
@@ -225,6 +240,49 @@ nonisolated final class Engine: @unchecked Sendable {
     }
 
     var hasCode: Bool { lock.withLock { !codeRoots.isEmpty } }
+
+    /// Opening/explicit Quick Look and Spotlight's recent-use updates enter the same durable priority queue.
+    func recordUses(_ uses: [FileUse], source: String) {
+        searchQueue.async { [self] in
+            guard saveUses(uses, source: source) else { return }
+            indexQueue.async { [self] in
+                if helper != nil { send("activity") } else { startHelper() }
+            }
+        }
+    }
+
+    @discardableResult
+    private func saveUses(_ uses: [FileUse], source: String) -> Bool {
+        let (roots, excluded, codeRoots, codeExcluded, types) = lock.withLock {
+            (self.roots, self.excluded, self.codeRoots, self.codeExcluded, Set(excludedTypes))
+        }
+        var changed = false
+        for (store, roots, skipped, code) in [(searchStore, roots, excluded, false),
+                                             (codeStore, codeRoots, codeExcluded, true)] {
+            guard let store else { continue }
+            let folders = roots.flatMap { [$0.path, FolderSelection.realPath($0.path)] }
+            let skips = skipped.flatMap { [$0.path, FolderSelection.realPath($0.path)] }
+            do {
+                try store.db.transaction {
+                    try store.expireActivity()
+                    try store.pruneActivity(keepingUnder: folders, excluded: skips, excludedTypes: types)
+                    for use in uses {
+                        let path = FolderSelection.realPath(use.path)
+                        guard FolderSelection.isSearched(path, folders: folders, skipped: skips),
+                              SpotlightActivity.eligible(path, code: code, excludedTypes: types) else { continue }
+                        if try store.recordUse(path: path, at: use.date, source: source) {
+                            var state: String?
+                            try store.db.query("SELECT state FROM files WHERE path = ?", [.text(path)]) {
+                                state = $0.text(0)
+                            }
+                            if state == nil || state == "pending" || state == "partial" { changed = true }
+                        }
+                    }
+                }
+            } catch { log("recent files: couldn't save activity: \(error)") }
+        }
+        return changed
+    }
 
     /// New code folders (none: code search off). The helper restarts with them; without any, the code index is deleted
     /// once the helper is gone.
@@ -248,6 +306,7 @@ nonisolated final class Engine: @unchecked Sendable {
             } else if codeSearcher == nil {
                 openCodeSearcher()
             }
+            saveUses([], source: "settings")
             indexQueue.async { [self] in
                 pruneWanted = true
                 // Off: the index goes once no helper has it open. On again before that: it stays (and is pruned).
@@ -279,6 +338,7 @@ nonisolated final class Engine: @unchecked Sendable {
             if roots.isEmpty { $0.activity = .idle }
         }
         watchQueue.async { [self] in startWatching() }
+        searchQueue.async { [self] in saveUses([], source: "settings") }
         indexQueue.async { [self] in
             pruneWanted = true
             if helper != nil {
@@ -293,8 +353,13 @@ nonisolated final class Engine: @unchecked Sendable {
     /// The model has finished downloading: index what's waiting, and meaning search may start.
     func modelArrived() {
         update { $0.waitingForModel = false }
-        encoderQueue.async { [self] in encoderFailed = false }
-        indexQueue.async { [self] in requestSync() }
+        // The text encoder may already be prepared while the media assets were downloading.
+        prepareQueryEncoder()
+        indexQueue.async { [self] in
+            // A helper that was waiting for the complete multimodal assets can now resume indexing.
+            syncWantedAt = Date()
+            if helper != nil { restartHelper = true; stopHelper() } else { startHelper() }
+        }
     }
 
     /// A drive was connected or ejected: a missing folder may be back (or gone).
@@ -345,42 +410,51 @@ nonisolated final class Engine: @unchecked Sendable {
         guard deleteCodeIndex, helper == nil else { return }
         deleteCodeIndex = false
         let file = indexDirectory.appendingPathComponent(IndexStore.codeFile)
-        for path in [file.path, file.path + "-wal", file.path + "-shm"] where FileManager.default.fileExists(atPath: path) {
+        for path in [file.path, file.path + "-wal", file.path + "-shm", file.path + ".ann"]
+            where FileManager.default.fileExists(atPath: path) {
             try? FileManager.default.removeItem(atPath: path)
         }
         log("code search off: the code index was deleted")
     }
 
     private func applyCode(_ counts: IndexStore.Counts) {
-        var files = 0, searchable = 0, pending = 0
+        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
         for states in counts.byKindAndState.values {
             for (state, count) in states {
                 files += count
                 if state == "done" || state == "partial" { searchable += count }
                 if state == "pending" { pending += count }
+                if state == "failed" { failed += count }
+                if state == "skipped" { skipped += count }
             }
         }
         update {
             $0.code.files = files
             $0.code.searchable = searchable
             $0.code.pending = pending
+            $0.code.failed = failed
+            $0.code.skipped = skipped
             $0.code.vectors = counts.vectors
         }
     }
 
     private func apply(_ counts: IndexStore.Counts) {
-        var files = 0, searchable = 0, pending = 0
+        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
         for states in counts.byKindAndState.values {
             for (state, count) in states {
                 files += count
                 if state == "done" || state == "partial" { searchable += count }
                 if state == "pending" { pending += count }
+                if state == "failed" { failed += count }
+                if state == "skipped" { skipped += count }
             }
         }
         update {
             $0.files = files
             $0.searchable = searchable
             $0.pending = pending
+            $0.failed = failed
+            $0.skipped = skipped
             $0.vectors = counts.vectors
             $0.unfinished = counts.unfinished
         }
@@ -474,8 +548,8 @@ nonisolated final class Engine: @unchecked Sendable {
         if helper != nil { send("sync") } else { startHelper() }
     }
 
-    /// Starts `digup index-service` unless one is running (or indexing is paused). It syncs first, indexes up to
-    /// 50 new files on any power source, then the backfill if the power policy allows; it exits a minute after
+    /// Starts `digup index-service` unless one is running (or indexing is paused). It syncs first, then processes
+    /// recently used rich files before bulk work when the power policy allows; it exits a minute after
     /// its last file. Before the model has downloaded it only syncs (file names become searchable) and exits.
     private func startHelper() {
         let (roots, excluded, types, paused, backfill): ([URL], [URL], [String], Bool, Bool) = lock.withLock {
@@ -493,7 +567,7 @@ nonisolated final class Engine: @unchecked Sendable {
         }
         let process = Process()
         process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup")
-        var arguments = ["index-service", "--index", indexDirectory.path]
+        var arguments = ["index-service", "--index", indexDirectory.path, "--rich-content-only", "--recent-first"]
         if backfill { arguments.append("--backfill") }
         if pruneWanted { arguments.append("--prune") }
         for folder in excluded { arguments += ["--exclude", folder.path] }
@@ -506,7 +580,9 @@ nonisolated final class Engine: @unchecked Sendable {
             arguments += extra.split(separator: " ").map(String.init)
         }
         process.arguments = arguments + roots.map(\.path)
-        process.environment = ProcessInfo.processInfo.environment.merging(["DIGUP_MODELS": modelsDirectory.path]) { $1 }
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "DIGUP_MODELS": modelsDirectory.path, "DIGUP_EMBEDDING_BACKEND": embeddingBackend.rawValue,
+        ]) { $1 }
         process.qualityOfService = .utility
         let input = Pipe(), output = Pipe()
         process.standardInput = input
@@ -589,7 +665,11 @@ nonisolated final class Engine: @unchecked Sendable {
             if int("new") > 0 { update { $0.activity = .indexing(done: 0, total: int("new")) } }
             log("sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
                 + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
+        case "indexing":
+            applyCounts(event)
+            update { $0.activity = .indexing(done: 0, total: int("files")) }
         case "file":
+            applyCounts(event)
             let (done, total) = (int("done"), int("total"))
             update { $0.activity = .indexing(done: done, total: total) }
             if event["new"] as? Bool == true, let path = event["path"] as? String {
@@ -598,14 +678,25 @@ nonisolated final class Engine: @unchecked Sendable {
             }
             refreshSearcher(force: false)
         case "rest":
-            update { $0.activity = .finishing(done: int("done"), total: int("total"), files: int("files")) }
+            // New helpers send collection counts as `files`; the pass's long-file count has its own key.
+            if event["long_files"] != nil { applyCounts(event) }
+            update {
+                $0.activity = .finishing(done: int("done"), total: int("total"),
+                                        files: event["long_files"] as? Int ?? int("files"))
+            }
             refreshSearcher(force: false)
         case "summary":
+            applyCounts(event)
+            update {
+                if case .indexing = $0.activity { $0.activity = .idle }
+                if case .finishing = $0.activity { $0.activity = .idle }
+            }
             let states = (event["states"] as? [String: Int] ?? [:]).sorted { $0.key < $1.key }
                 .map { "\($0.value) \($0.key)" }.joined(separator: " · ")
             let what = event["rest"] as? Bool == true ? "the rest of long files"
                 : event["new"] as? Bool == true ? "new files" : "backfill"
-            log("index: \(what): \(states) in \(int("ms")) ms")
+            if !states.isEmpty { log("index: \(what): \(states) in \(int("ms")) ms") }
+            refreshSearcher(force: false)
         case "idle":
             applyCounts(event)
             update { $0.activity = .idle }
@@ -629,7 +720,7 @@ nonisolated final class Engine: @unchecked Sendable {
         case "stopped":
             log("indexer: skipped \(tildePath(event["path"] as? String ?? "?")): it \(event["why"] as? String ?? "")")
         case "rescan":
-            log("indexer: reading \(int("files")) files again that DigUp reads better now (scans' words, SVGs)")
+            log("indexer: reading \(int("files")) files again that NeuralSpotlight reads better now (scans' words, SVGs)")
         case "pruned":
             log("indexer: \(int("files")) files under folders no longer chosen left the index")
         case "reindex":
@@ -652,15 +743,20 @@ nonisolated final class Engine: @unchecked Sendable {
             if int("new") > 0, int("pending") == 0 { update { $0.code.indexing = .init(done: 0, total: int("new")) } }
             log("code sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
                 + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
+        case "indexing":
+            applyCounts(event)
+            update { $0.code.indexing = .init(done: 0, total: int("code_files")) }
         case "file":
+            applyCounts(event)
             update { $0.code.indexing = .init(done: int("done"), total: int("total")) }
             refreshCodeSearcher(force: false)
         case "summary":
+            applyCounts(event)
             let states = (event["states"] as? [String: Int] ?? [:]).sorted { $0.key < $1.key }
                 .map { "\($0.value) \($0.key)" }.joined(separator: " · ")
-            log("index: code: \(states) in \(int("ms")) ms")
+            if !states.isEmpty { log("index: code: \(states) in \(int("ms")) ms") }
             update { $0.code.indexing = nil }
-            refreshCodeSearcher(force: true)
+            refreshCodeSearcher(force: false)
         case "missing":
             let folders = event["folders"] as? [String] ?? []
             let unreadable = event["unreadable"] as? [String] ?? []
@@ -690,6 +786,8 @@ nonisolated final class Engine: @unchecked Sendable {
                 $0.files = files
                 $0.searchable = event["searchable"] as? Int ?? 0
                 $0.pending = event["pending"] as? Int ?? 0
+                $0.failed = event["failed"] as? Int ?? 0
+                $0.skipped = event["skipped"] as? Int ?? 0
                 $0.vectors = event["vectors"] as? Int ?? 0
                 $0.unfinished = event["unfinished"] as? Int ?? 0
             }
@@ -699,6 +797,8 @@ nonisolated final class Engine: @unchecked Sendable {
                 $0.code.files = files
                 $0.code.searchable = event["code_searchable"] as? Int ?? 0
                 $0.code.pending = event["code_pending"] as? Int ?? 0
+                $0.code.failed = event["code_failed"] as? Int ?? 0
+                $0.code.skipped = event["code_skipped"] as? Int ?? 0
                 $0.code.vectors = event["code_vectors"] as? Int ?? 0
             }
         }
@@ -803,9 +903,28 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // MARK: Search
 
-    /// Hybrid search. Without a vector it's keyword-only (file names, OCR and document text), which is what the panel
-    /// shows while the query encoder starts. Files that are gone (deleted since the last sync, or on a drive that's
-    /// unplugged) are left out.
+    /// System results remain responsive while a large semantic index is loading or rebuilding its ANN cache.
+    func searchLocal(_ text: String, kinds: Set<FileKind>? = nil, limit: Int = 40) async -> [SearchHit] {
+        let request = SearchCancellation()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                localSearchQueue.async { [self] in
+                    // A cancelled keystroke must not start another Spotlight query when it reaches the queue.
+                    guard !request.isCancelled else { return continuation.resume(returning: []) }
+                    let (chosen, skipped, types) = lock.withLock { (roots, excluded, Set(excludedTypes)) }
+                    let hits = localSearch.search(text, roots: chosen, excluded: skipped,
+                        excludedTypes: types, kinds: kinds, limit: limit, isCancelled: { request.isCancelled })
+                    continuation.resume(returning: request.isCancelled ? [] : hits)
+                }
+            }
+        } onCancel: {
+            request.cancel()
+        }
+    }
+
+    /// Search the app's index. Spotlight runs independently through `searchLocal`; the views merge its results as
+    /// they arrive, so system metadata queries never hold up keyword or meaning results. Without a vector this
+    /// searches indexed names, OCR and document text. Deleted files and unplugged drives are left out.
     /// `code`: the code index (its own folders), never anything else.
     func search(_ text: String, vector: QueryVector?, prefixLast: Bool, kinds: Set<FileKind>? = nil,
                 limit: Int = 40, code: Bool = false) async -> [SearchHit] {
@@ -829,11 +948,12 @@ nonisolated final class Engine: @unchecked Sendable {
                     (self.roots, self.excluded, Set(self.excludedTypes))
                 }
                 let folders = chosen.map(\.path), skipped = excluded.map(\.path)
-                continuation.resume(returning: (hits ?? []).filter { hit in
+                let content = (hits ?? []).filter { hit in
                     FolderSelection.isSearched(hit.path, folders: folders, skipped: skipped)
                         && !types.contains((hit.path as NSString).pathExtension.lowercased())
                         && FileManager.default.fileExists(atPath: hit.path)
-                })
+                }
+                continuation.resume(returning: content)
             }
         }
     }
@@ -918,13 +1038,17 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // MARK: Query encoder
 
-    /// Gets meaning search ready as the panel opens: starts the query encoder (~0.35 s cold) and loads the vectors,
-    /// in parallel, so both are usually done by the time you've typed a few words.
-    func prewarm() {
+    /// Prepare the common query graph off the UI thread, ahead of the first typed search.
+    func prepareQueryEncoder() {
         encoderQueue.async { [self] in
-            encoderFailed = false   // opening the panel is a fresh chance
+            encoderFailed = false
             if runningEncoder() != nil { scheduleIdleExit() }
         }
+    }
+
+    /// Opening a search surface also prepares the encoder if it was released after a long idle period.
+    func prewarm() {
+        prepareQueryEncoder()
         searchQueue.async { [self] in
             guard let searcher, !searcher.vectorsLoaded else { return }
             let started = Date()
@@ -937,9 +1061,7 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
-    /// Embeds what's typed so far, right away, and caches it. The panel calls this on every keystroke: the GPU stays
-    /// awake (after even 150 ms idle a query takes ~19 ms instead of ~6), and when typing pauses the vector is
-    /// usually ready. Skipped when newer text arrives before its turn.
+    /// Embeds a debounced query and caches it. Skip queued requests superseded before their turn.
     func embedAhead(_ text: String, code: Bool = false) {
         let key = Self.cacheKey(text, code: code)
         lock.withLock { newestTyped = key }
@@ -988,14 +1110,15 @@ nonisolated final class Engine: @unchecked Sendable {
         guard !encoderFailed else { return nil }
         let python = try? WorkerConfig.fromEnvironment()
         // Still downloading: no meaning search yet, which isn't a failure.
-        guard python != nil || FileManager.default.fileExists(
-            atPath: modelsDirectory.appendingPathComponent(ModelFiles.text.name).path) else { return nil }
+        guard python != nil || CoreMLModelFiles.complete(in: modelsDirectory.appendingPathComponent("CoreML"),
+                                                        textOnly: true) else { return nil }
         update { $0.encoder = .starting }
         let started = Date()
         do {
             // The bundled helper runs the model (`digup worker`); in dev runs DIGUP_WORKER_DIR swaps in another worker.
             var config = python ?? .helper(Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup"))
             config.environment["DIGUP_MODELS"] = modelsDirectory.path
+            config.environment["DIGUP_EMBEDDING_BACKEND"] = embeddingBackend.rawValue
             config.log = indexDirectory.appendingPathComponent("worker-query.log")
             config.qos = .userInitiated
             let worker = try EmbeddingWorker(config, textOnly: true)
@@ -1011,7 +1134,7 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
-    /// The encoder exits after `encoderIdleSeconds` without a query (its ~0.25 GB goes back to the system), and the
+    /// The encoder exits after `encoderIdleSeconds` without a query (its working memory returns to the system), and the
     /// vectors go with it; keyword search keeps working, and the next panel open brings both back.
     private func scheduleIdleExit() {
         encoderIdleExit?.cancel()
@@ -1037,6 +1160,14 @@ nonisolated final class Engine: @unchecked Sendable {
         encoderIdleExit = nil
         update { $0.encoder = .stopped }
     }
+}
+
+/// Cancellation crosses from a Swift task to the serial Spotlight queue, including a query already gathering.
+private nonisolated final class SearchCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var isCancelled: Bool { lock.withLock { cancelled } }
+    func cancel() { lock.withLock { cancelled = true } }
 }
 
 /// Recent query vectors by text: retyping or going back to an earlier query costs nothing.

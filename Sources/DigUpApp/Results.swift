@@ -26,7 +26,7 @@ struct ResultRow: Identifiable, Equatable {
     init(_ hit: SearchHit, terms: [String] = []) {
         id = hit.path
         url = URL(fileURLWithPath: hit.path)
-        name = url.lastPathComponent
+        name = hit.info["display_name"] ?? url.lastPathComponent
         // Code says where it is in its repo: "billing/payments".
         if hit.kind == .code, let repo = hit.info["repo"], hit.path.hasPrefix(repo + "/") {
             let parent = (repo as NSString).deletingLastPathComponent
@@ -151,10 +151,10 @@ struct ResultRow: Identifiable, Equatable {
 enum ResultGroupKind: CaseIterable {
     case screenshots, images, documents, video, audio
     /// Code search's results (the code index; a search of it never shows anything else).
-    case code
+    case code, otherFiles, folders, applications
 
-    /// The kinds of files the main index holds: the window's kind filters, ⌘2 to ⌘6.
-    static let files: [ResultGroupKind] = [.screenshots, .images, .documents, .video, .audio]
+    /// Content and metadata filters. The first five retain their ⌘2 to ⌘6 shortcuts.
+    static let files: [ResultGroupKind] = [.screenshots, .images, .documents, .video, .audio, .otherFiles, .folders, .applications]
 
     init(_ kind: FileKind) {
         switch kind {
@@ -164,6 +164,9 @@ enum ResultGroupKind: CaseIterable {
         case .video: self = .video
         case .audio: self = .audio
         case .code: self = .code
+        case .file: self = .otherFiles
+        case .folder: self = .folders
+        case .application: self = .applications
         }
     }
 
@@ -175,6 +178,9 @@ enum ResultGroupKind: CaseIterable {
         case .video: "Video"
         case .audio: "Audio"
         case .code: "Code"
+        case .otherFiles: "Files"
+        case .folders: "Folders"
+        case .applications: "Applications"
         }
     }
 
@@ -186,6 +192,9 @@ enum ResultGroupKind: CaseIterable {
         case .video: FileKind.video.symbol
         case .audio: FileKind.audio.symbol
         case .code: FileKind.code.symbol
+        case .otherFiles: FileKind.file.symbol
+        case .folders: FileKind.folder.symbol
+        case .applications: FileKind.application.symbol
         }
     }
 
@@ -197,6 +206,9 @@ enum ResultGroupKind: CaseIterable {
         case .video: [.video]
         case .audio: [.audio]
         case .code: [.code]
+        case .otherFiles: [.file]
+        case .folders: [.folder]
+        case .applications: [.application]
         }
     }
 }
@@ -253,6 +265,9 @@ extension FileKind {
         case .audio: "Audio"
         case .video: "Video"
         case .code: "Code"
+        case .file: "File"
+        case .folder: "Folder"
+        case .application: "Application"
         }
     }
 
@@ -265,6 +280,9 @@ extension FileKind {
         case .audio: "waveform"
         case .video: "film"
         case .code: "chevron.left.forwardslash.chevron.right"
+        case .file: "doc"
+        case .folder: "folder"
+        case .application: "app"
         }
     }
 }

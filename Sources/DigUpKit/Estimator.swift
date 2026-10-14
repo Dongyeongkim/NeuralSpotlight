@@ -73,6 +73,7 @@ public enum Estimator {
             let before = estimate.seconds
             defer { estimate.kindSeconds[file.kind, default: 0] += estimate.seconds - before }
             switch file.kind {
+            case .file, .folder, .application: break // metadata only
             case .image: estimate.seconds += costs.image
             case .screenshot: estimate.seconds += costs.screenshot
             case .pdf:

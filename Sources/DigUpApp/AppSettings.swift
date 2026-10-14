@@ -3,11 +3,11 @@ import Foundation
 
 /// What to index, where the index and the model live, and the hotkey.
 ///
-/// Saved in the app's defaults domain (com.abdurrahim.DigUp). Launch arguments override any of it without being
+/// Saved in the app's defaults domain (com.neuralspotlight.app). Launch arguments override any of it without being
 /// saved, which is how tests point the app at the testbed and never at real folders:
 ///
-///     DigUp.app/Contents/MacOS/DigUp -roots ~/DigUpTestbed/real -indexDir <repo>/.dev/app-index \
-///         -modelsDir <repo>/.dev/models -defaultsSuite com.abdurrahim.DigUp.dev
+///     NeuralSpotlight.app/Contents/MacOS/NeuralSpotlight -roots ~/DigUpTestbed/real -indexDir <repo>/.dev/app-index \
+///         -modelsDir <repo>/.dev/models -defaultsSuite com.neuralspotlight.dev
 ///
 /// `-roots` takes one folder, several joined with ":", or a plist array. `-defaultsSuite` keeps what the app saves
 /// (onboarding's folders, a new hotkey) out of the real settings. With no roots the app indexes nothing and opens
@@ -21,15 +21,16 @@ nonisolated struct AppSettings: Sendable {
     var indexDirectory: URL
     /// Where the model files are downloaded to and loaded from (the helpers get it as DIGUP_MODELS).
     var modelsDirectory: URL
+    var embeddingBackend: EmbeddingBackend
     var hotkey: String
-    /// On (the default), the big first pass of a folder (the backfill) runs on battery too; off, it waits for a
-    /// charger. New files always index right away, and Low Power Mode or a hot Mac make the backfill wait either way.
+    /// On (the default), semantic indexing runs on battery too; off, it waits for a charger. Recent and new files
+    /// obey the same gate; Low Power Mode or a hot Mac pause semantic indexing either way.
     var indexOnBattery: Bool
     /// "Index only at set hours": off by default. Outside the hours no helper runs (no crawl, no new files, no
     /// backfill); search works all day. The hours are kept while it's off.
     var indexHoursOn: Bool
     var indexHours: IndexHours
-    /// The query encoder (~0.25 GB) exits after this long without a query; the next panel open starts it again.
+    /// The query encoder exits after this long without a query; the next debounced semantic query starts it again.
     var encoderIdleSeconds: Double
     /// Onboarding was finished (or closed after choosing folders); it doesn't open by itself again.
     var onboarded: Bool
@@ -43,14 +44,13 @@ nonisolated struct AppSettings: Sendable {
     /// The code index catches up once the code folders have been quiet this long (`-codeQuietSeconds`, default 60).
     var codeQuietSeconds: Double
 
-    static let supportDirectory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/DigUp")
+    static let supportDirectory = AppPaths.applicationSupport
     static let defaultIndexDirectory = supportDirectory.appendingPathComponent("index.noindex")
     static let defaultHotkey = "cmd+shift+space"
 
     /// The battery switch, in onboarding and Settings.
     static let batteryTitle = "Index on battery power"
-    static let batteryDetail = "When it's off, a folder's first pass waits for a charger. New files always go in right away."
+    static let batteryDetail = "When it's off, semantic indexing waits for a charger. Recently used files are processed first. Spotlight search stays available."
 
     /// Where settings are saved. Reads see launch arguments first either way. (UserDefaults is thread-safe.)
     nonisolated(unsafe) static let defaults: UserDefaults = {
@@ -60,6 +60,7 @@ nonisolated struct AppSettings: Sendable {
     }()
 
     static func load() -> AppSettings {
+        importLegacyPreferences()
         let defaults = Self.defaults
         return AppSettings(
             roots: folders(defaults, "roots"),
@@ -69,6 +70,8 @@ nonisolated struct AppSettings: Sendable {
                 .flatMap { IndexOptions.extensions($0) }.sorted(),
             indexDirectory: defaults.string(forKey: "indexDir").map(folderURL) ?? defaultIndexDirectory,
             modelsDirectory: defaults.string(forKey: "modelsDir").map(folderURL) ?? ModelFiles.installed,
+            embeddingBackend: defaults.string(forKey: "embeddingBackend").flatMap(EmbeddingBackend.init(rawValue:))
+                ?? EmbeddingBackend.environment,
             hotkey: defaults.string(forKey: "hotkey") ?? defaultHotkey,
             indexOnBattery: defaults.object(forKey: "indexOnBattery") == nil || defaults.bool(forKey: "indexOnBattery"),
             indexHoursOn: defaults.bool(forKey: "indexHoursOn"),
@@ -88,6 +91,23 @@ nonisolated struct AppSettings: Sendable {
     }
 
     /// A list of folders: a plist array, or paths joined with ":" (the form launch arguments use).
+    /// Carry selected folders and shortcuts into the renamed app once. Never copy upstream updater state.
+    private static func importLegacyPreferences() {
+        guard UserDefaults.standard.string(forKey: "defaultsSuite") == nil,
+              Bundle.main.bundleIdentifier == "com.neuralspotlight.app",
+              !defaults.bool(forKey: "importedDigUpPreferences") else { return }
+        let legacy = defaults.persistentDomain(forName: "com.abdurrahim.DigUp") ?? [:]
+        let current = defaults.persistentDomain(forName: "com.neuralspotlight.app") ?? [:]
+        let keys = ["roots", "excludedFolders", "excludedTypes", "indexDir", "modelsDir", "embeddingBackend",
+                    "hotkey", "indexOnBattery", "indexHoursOn", "indexHoursFrom", "indexHoursTo",
+                    "encoderIdleSeconds", "onboarded", "codeRoots", "codeExcludedFolders", "codeEditor",
+                    "codeQuietSeconds"]
+        for key in keys where current[key] == nil {
+            if let value = legacy[key] { defaults.set(value, forKey: key) }
+        }
+        defaults.set(true, forKey: "importedDigUpPreferences")
+    }
+
     private static func folders(_ defaults: UserDefaults, _ key: String) -> [URL] {
         let paths: [String]
         if let list = defaults.stringArray(forKey: key) {

@@ -81,6 +81,7 @@ extension Engine {
     /// Opens `row` in its app: a PDF with words from its page to search for, a recording at its moment when the app
     /// can be told it (see `Opener`).
     func open(_ row: ResultRow) {
+        if !Opener.dryRun { recordUses([FileUse(path: row.id, date: Date())], source: "open") }
         if row.kind == .code { return CodeEditor.current.open(row.url, line: row.codeLine) }
         guard let page = row.page else { return Opener.open(row, searching: nil) }
         let (url, words) = (row.url, row.foundWords + row.terms)
@@ -99,7 +100,7 @@ extension Engine {
 /// Opens a result in its app:
 /// - a PDF page: with words from that page to search for, as Spotlight opens documents (Preview fills its search with
 ///   them and lists the matches by page; it doesn't go to the first one by itself, checked 2026-10-08)
-/// - a moment in QuickTime Player: it's asked to go there (macOS asks once whether DigUp may control it; without
+/// - a moment in QuickTime Player: it's asked to go there (macOS asks once whether NeuralSpotlight may control it; without
 ///   that, the recording opens at the start)
 /// - a moment in IINA: its URL scheme takes a start time
 enum Opener {
@@ -116,6 +117,14 @@ enum Opener {
 
     /// `words`: what to search for in a PDF (`Landmark.find`).
     static func open(_ row: ResultRow, searching words: String?) {
+        if row.kind == .application {
+            if dryRun { log("open (dry run): application \(row.name)"); return }
+            NSWorkspace.shared.openApplication(at: row.url, configuration: NSWorkspace.OpenConfiguration()) {
+                _, error in
+                if let error { log("can't open application: \(error)") }
+            }
+            return
+        }
         guard let app = NSWorkspace.shared.urlForApplication(toOpen: row.url) else {
             if !dryRun { NSWorkspace.shared.open(row.url) }
             return

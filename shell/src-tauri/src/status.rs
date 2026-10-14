@@ -57,14 +57,20 @@ impl Status {
             "sync" if matches!(self.activity, Activity::Failed(_)) => self.activity = Activity::Idle,
             "file" => {
                 self.activity = Activity::Indexing { done: count("done"), total: count("total") };
-                // The counts come with a sync; each file read since leaves "waiting".
-                self.pending = self.pending.saturating_sub(1);
-                if matches!(event["state"].as_str(), Some("done" | "partial")) {
-                    self.searchable += 1;
+                // Older helpers only send counts with a sync. New helpers already include the committed
+                // collection counts in this event, so counting the file again would overstate coverage.
+                if !event["files"].is_u64() {
+                    self.pending = self.pending.saturating_sub(1);
+                    if matches!(event["state"].as_str(), Some("done" | "partial")) {
+                        self.searchable += 1;
+                    }
                 }
             }
             "rest" => {
-                self.activity = Activity::Finishing { done: count("done"), total: count("total"), files: count("files") }
+                self.activity = Activity::Finishing {
+                    done: count("done"), total: count("total"),
+                    files: event["long_files"].as_u64().unwrap_or_else(|| count("files")),
+                }
             }
             "idle" | "waiting" => self.activity = Activity::Idle,
             "missing" => {
@@ -271,6 +277,10 @@ mod tests {
         assert_eq!(status.line(true, &ready), "Indexing 42% · 129 of 306");
         status.apply(&json!({"event": "rest", "done": 40, "total": 100, "files": 3}));
         assert_eq!(status.line(true, &ready), "Reading the rest of 3 long files · 40%");
+        status.apply(&json!({"event": "rest", "done": 40, "total": 100, "files": 15,
+                            "searchable": 15, "pending": 0, "unfinished": 1, "long_files": 1}));
+        assert_eq!(status.line(true, &ready), "Reading the rest of 1 long file · 40%");
+        assert_eq!(status.files, 15);
         status.apply(&json!({"event": "idle", "files": 1306, "searchable": 1306, "pending": 0, "unfinished": 0}));
         assert_eq!(status.line(true, &ready), "1,306 files indexed");
         assert_eq!(status.progress(&ready), None);
@@ -293,5 +303,20 @@ mod tests {
         assert_eq!(number(999), "999");
         assert_eq!(number(1000), "1,000");
         assert_eq!(number(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn authoritative_file_counts_are_not_counted_twice() {
+        let mut status = Status::default();
+        status.apply(&json!({"event": "file", "done": 4, "total": 4, "state": "done",
+                            "files": 601, "searchable": 4, "pending": 597}));
+        assert_eq!(status.files, 601);
+        assert_eq!(status.searchable, 4);
+        assert_eq!(status.pending, 597);
+
+        // The old protocol still needs the incremental update when counts are absent.
+        status.apply(&json!({"event": "file", "done": 1, "total": 8, "state": "partial"}));
+        assert_eq!(status.searchable, 5);
+        assert_eq!(status.pending, 596);
     }
 }

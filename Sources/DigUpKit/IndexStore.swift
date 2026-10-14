@@ -20,7 +20,9 @@ public struct FileRecord: Sendable {
 public final class IndexStore {
     public let directory: URL
     public let db: Database
-    static let schemaVersion: Int64 = 5
+    static let schemaVersion: Int64 = 6
+    /// Scheduling policy only: never part of a vector's fingerprint.
+    public var prioritizeRecent = false
 
     /// Keyword search's tokenizer. Marks (M*) count as letters, so Bengali vowel signs and Arabic harakat stay inside
     /// their words: by default SQLite splits on them ("কলকাতায়" became "কলক", "ত", "য").
@@ -74,11 +76,21 @@ public final class IndexStore {
         try migrate()
     }
 
-    /// Bytes on disk: the database and its write-ahead log.
+    /// Bytes on disk: the database, its write-ahead log and the rebuildable ANN cache.
     public static func size(of file: URL) -> Int64 {
-        [file.path, file.path + "-wal"].reduce(0) { total, path in
+        let database = [file.path, file.path + "-wal"].reduce(Int64(0)) { total, path in
             total + ((try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0)
         }
+        let cache = URL(fileURLWithPath: file.path + ".ann", isDirectory: true)
+        guard let walker = FileManager.default.enumerator(at: cache, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])
+        else { return database }
+        var bytes = database
+        for case let url as URL in walker {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+                  values.isRegularFile == true else { continue }
+            bytes += Int64(values.fileSize ?? 0)
+        }
+        return bytes
     }
 
     /// Schema changes ship as one migration each, and the layout below was designed to need as few as possible
@@ -101,6 +113,7 @@ public final class IndexStore {
             if (1...2).contains(version) { try migrateScreenshotText() }
             if (1...3).contains(version) { try migrateVectorNames() }
             if (1...4).contains(version) { try migrateLongFiles() }
+            if (1...5).contains(version) { try createActivity() }
         }
     }
 
@@ -136,6 +149,58 @@ public final class IndexStore {
             CREATE VIRTUAL TABLE fts USING fts5(\(Self.ftsColumns));
             PRAGMA user_version = \(Self.schemaVersion);
             """)
+        try createActivity()
+    }
+
+    private func createActivity() throws {
+        try db.execute("""
+            CREATE TABLE IF NOT EXISTS activity(
+                path TEXT PRIMARY KEY, last_used REAL NOT NULL, source TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS activity_recent ON activity(last_used DESC);
+            PRAGMA user_version = 6;
+            """)
+    }
+
+    /// Activity can arrive before the first crawl. Keep only the latest observation, not a browsing history.
+    @discardableResult
+    public func recordUse(path: String, at date: Date, source: String, now: Date = Date()) throws -> Bool {
+        guard date.timeIntervalSince1970.isFinite, date <= now.addingTimeInterval(60),
+              date >= now.addingTimeInterval(-30 * 86400) else { return false }
+        try db.run("""
+            INSERT INTO activity(path, last_used, source) VALUES(?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET last_used = excluded.last_used, source = excluded.source
+            WHERE excluded.last_used > activity.last_used
+            """, [.text(path), .double(date.timeIntervalSince1970), .text(source)])
+        var changed = false
+        try db.query("SELECT changes()") { changed = $0.int(0) > 0 }
+        return changed
+    }
+
+    public func expireActivity(now: Date = Date()) throws {
+        try db.run("DELETE FROM activity WHERE last_used < ?", [.double(now.addingTimeInterval(-30 * 86400).timeIntervalSince1970)])
+    }
+
+    public func pruneActivity(keepingUnder roots: [String], excluded: [String], excludedTypes: Set<String>) throws {
+        var removed: [String] = []
+        try db.query("SELECT path FROM activity") { row in
+            guard let path = row.text(0) else { return }
+            if !FolderSelection.isSearched(path, folders: roots, skipped: excluded)
+                || excludedTypes.contains((path as NSString).pathExtension.lowercased()) { removed.append(path) }
+        }
+        for path in removed { try db.run("DELETE FROM activity WHERE path = ?", [.text(path)]) }
+    }
+
+    /// Pending or partial rich files used in the last 30 days; completed files are not embedded again on opening.
+    public func recentFiles(limit: Int = 8, now: Date = Date()) throws -> [FileRecord] {
+        var rows: [FileRecord] = []
+        try db.query("""
+            SELECT \(Self.fileColumns) FROM files WHERE state IN ('pending', 'partial')\(scopeSQL)
+                AND path IN (SELECT path FROM activity WHERE last_used >= ?)
+            ORDER BY (SELECT last_used FROM activity WHERE activity.path = files.path) DESC, id LIMIT ?
+            """, scopeValues + [.double(now.addingTimeInterval(-30 * 86400).timeIntervalSince1970),
+                                 .int(Int64(max(0, limit)))]) { rows.append(Self.record($0)) }
+        return rows
     }
 
     /// Schema 1 → 2: keyword search with whole Bengali and Arabic words (`tokenizer`) over normalized text
@@ -167,7 +232,7 @@ public final class IndexStore {
     }
 
     /// Schema 3 → 4: indexes name their vectors by a vector version, not by the llama.cpp build that made them, so a
-    /// llama.cpp update that leaves the vectors alone keeps the index (`LlamaEmbedder.vectorVersion`). Every index so
+    /// runtime update that leaves the vectors alone keeps the index. Every legacy index so
     /// far comes from b11461, which made version 1. Nothing is embedded again.
     private func migrateVectorNames() throws {
         try db.execute("""
@@ -278,6 +343,13 @@ public final class IndexStore {
     /// Same inode, size and date at a new path: a move or rename. Only the path changes; nothing is re-embedded.
     /// (Screenshot tools move screenshots into project folders all the time.)
     public func move(_ id: Int64, to path: String) throws {
+        try db.run("""
+            INSERT INTO activity(path, last_used, source)
+            SELECT ?, last_used, source FROM activity WHERE path = (SELECT path FROM files WHERE id = ?)
+            ON CONFLICT(path) DO UPDATE SET last_used = MAX(activity.last_used, excluded.last_used)
+            """, [.text(path), .int(id)])
+        try db.run("DELETE FROM activity WHERE path = (SELECT path FROM files WHERE id = ?) AND path != ?",
+                   [.int(id), .text(path)])
         try db.run("UPDATE files SET path = ? WHERE id = ?", [.text(path), .int(id)])
         try db.run("""
             UPDATE fts SET name = ?, body = ? WHERE rowid IN (SELECT id FROM segments WHERE file = ? AND kind = 'name')
@@ -286,6 +358,7 @@ public final class IndexStore {
     }
 
     public func delete(_ id: Int64) throws {
+        try db.run("DELETE FROM activity WHERE path = (SELECT path FROM files WHERE id = ?)", [.int(id)])
         try db.run("DELETE FROM fts WHERE rowid IN (SELECT id FROM segments WHERE file = ?)", [.int(id)])
         try db.run("DELETE FROM files WHERE id = ?", [.int(id)])
     }
@@ -295,6 +368,12 @@ public final class IndexStore {
     public func prune(keepingUnder roots: [String]) throws -> Int {
         let prefixes = roots.flatMap { Self.pathRanges(under: $0).map(\.from) }   // a folder under /var: /private/var too
         var gone: [Int64] = []
+        var forgotten: [String] = []
+        try db.query("SELECT path FROM activity") { row in
+            let path = row.text(0) ?? ""
+            if !prefixes.contains(where: { path.hasPrefix($0) }) { forgotten.append(path) }
+        }
+        for path in forgotten { try db.run("DELETE FROM activity WHERE path = ?", [.text(path)]) }
         try db.query("SELECT id, path FROM files") { row in
             let path = row.text(1) ?? ""
             if !prefixes.contains(where: { path.hasPrefix($0) }) { gone.append(row.int(0)) }
@@ -313,6 +392,7 @@ public final class IndexStore {
             try db.run("DELETE FROM segments WHERE kind != 'name'")
             try db.run("UPDATE files SET state = 'pending', detail = NULL, info = NULL, indexed_at = NULL")
             try setMeta("fingerprint", nil)
+            try setMeta("vector_source", nil)
         }
     }
 
@@ -321,9 +401,11 @@ public final class IndexStore {
         var out: [FileRecord] = []
         if let ids, ids.isEmpty { return out }
         let filter = ids.map { " AND id IN (\($0.map(String.init).joined(separator: ",")))" } ?? ""
+        let priority = prioritizeRecent
+            ? "COALESCE((SELECT last_used FROM activity WHERE activity.path = files.path), 0) DESC, " : ""
         try db.query("""
             SELECT \(Self.fileColumns) FROM files WHERE state = 'pending'\(filter)\(scopeSQL)
-            ORDER BY \(FileKind.indexingOrderSQL), mtime DESC LIMIT ?
+            ORDER BY \(priority)\(FileKind.indexingOrderSQL), mtime DESC LIMIT ?
             """, scopeValues + [.int(Int64(limit ?? -1))]) { out.append(Self.record($0)) }
         return out
     }

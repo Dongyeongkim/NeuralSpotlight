@@ -22,11 +22,12 @@ final class AppController {
     private(set) var statusMenu: StatusMenuController!
     private(set) var onboarding: OnboardingController?
     private var observers: [NSObjectProtocol] = []
+    private var recentFiles: RecentFilesMonitor?
     /// Set while onboarding's shortcut step waits for you to try the hotkey: a press goes there, not to the panel.
     var hotkeyTester: (() -> Void)?
 
     init(settings: AppSettings) {
-        let download = ModelDownload(folder: settings.modelsDirectory)
+        let download = ModelDownload(folder: settings.modelsDirectory, backend: settings.embeddingBackend)
         let model = AppModel(settings: settings, download: download)
         var engineRef: Engine?
         let power = PowerPolicy(indexOnBattery: settings.indexOnBattery) { blocker in
@@ -84,7 +85,10 @@ final class AppController {
         Previews.shared.passage = { [engine] id, code in await engine.text(ofSegment: id, code: code) }
         CodeEditor.current = CodeEditor.chosen(model.settings.codeEditor)
         download.onReady = { [weak self] in self?.engine.modelArrived() }
+        download.onTextReady = { [weak self] in self?.engine.prepareQueryEncoder() }
         engine.start()
+        recentFiles = RecentFilesMonitor { [engine] uses in engine.recordUses(uses, source: "spotlight") }
+        watchRecentFiles()
         let settings = model.settings
         if !settings.onboarded, settings.roots.isEmpty {
             showOnboarding()
@@ -137,6 +141,7 @@ final class AppController {
         model.settings.excludedFolders = excluded
         model.settings.excludedTypes = types
         engine.setFolders(roots: roots, excluded: excluded, excludedTypes: types)
+        watchRecentFiles()
     }
 
     func removeFolder(_ root: URL) {
@@ -147,6 +152,7 @@ final class AppController {
         AppSettings.save(excludedFolders: folders)
         model.settings.excludedFolders = folders
         engine.setFolders(roots: model.settings.roots, excluded: folders, excludedTypes: model.settings.excludedTypes)
+        watchRecentFiles()
     }
 
     /// File extensions never to index ("heic, .txt"); files of those types already indexed leave the index.
@@ -156,6 +162,7 @@ final class AppController {
         AppSettings.save(excludedTypes: types)
         model.settings.excludedTypes = types
         engine.setFolders(roots: model.settings.roots, excluded: model.settings.excludedFolders, excludedTypes: types)
+        watchRecentFiles()
     }
 
     // MARK: Code search
@@ -172,6 +179,11 @@ final class AppController {
         model.settings.codeRoots = roots
         model.settings.codeExcluded = excluded
         engine.setCodeFolders(roots: roots, excluded: excluded)
+        watchRecentFiles()
+    }
+
+    private func watchRecentFiles() {
+        recentFiles?.watch(model.settings.roots + model.settings.codeRoots)
     }
 
     func removeCodeFolder(_ root: URL) {
@@ -209,7 +221,7 @@ final class AppController {
         panel.allowsMultipleSelection = true
         panel.canCreateDirectories = false
         panel.prompt = prompt
-        panel.message = "Choose folders for DigUp to search."
+        panel.message = "Choose folders for NeuralSpotlight to search."
         let finish = { (response: NSApplication.ModalResponse) in
             done(response == .OK ? panel.urls.map { AppSettings.folderURL($0.path) } : [])
         }

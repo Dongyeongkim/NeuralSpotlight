@@ -48,7 +48,10 @@ public enum AppPaths {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let environment = ProcessInfo.processInfo.environment
         #if os(macOS)
-        return home.appendingPathComponent("Library/Application Support/DigUp")
+        let legacy = home.appendingPathComponent("Library/Application Support/DigUp")
+        // Reuse the existing index and models in place: a rename must not create a second corpus or download.
+        if FileManager.default.fileExists(atPath: legacy.path) { return legacy }
+        return home.appendingPathComponent("Library/Application Support/NeuralSpotlight")
         #elseif os(Windows)
         if let local = environment["LOCALAPPDATA"], !local.isEmpty {
             return URL(fileURLWithPath: local).appendingPathComponent("DigUp")

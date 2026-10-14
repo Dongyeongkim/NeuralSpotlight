@@ -89,30 +89,40 @@ import WinSDK
     }
 
     @Test func missingModelFilesInDownloadOrder() throws {
-        #expect(ModelFiles.missing(in: folder) == [ModelFiles.text, ModelFiles.media])
-        FileManager.default.createFile(atPath: folder.appendingPathComponent(ModelFiles.text.name).path, contents: nil)
-        #expect(ModelFiles.missing(in: folder) == [ModelFiles.media])
-        #expect(ModelFiles.totalBytes == 864_676_480)
+        let files = CoreMLModelFiles.all
+        #expect(CoreMLModelFiles.missing(in: folder) == files)
+        let first = folder.appendingPathComponent(files[0].name)
+        try FileManager.default.createDirectory(at: first.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: first.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: first)
+        try handle.truncate(atOffset: UInt64(files[0].bytes))
+        try handle.close()
+        #expect(CoreMLModelFiles.missing(in: folder) == Array(files.dropFirst()))
+        #expect(CoreMLModelFiles.totalBytes == files.reduce(0) { $0 + $1.bytes })
     }
 
     @Test func modelFilesComeFromTheHuggingFaceCacheWhenThere() throws {
         // As `hf download` leaves them: snapshots/<revision>/<name> → a blob. Sparse, so no disk is used.
         let hub = folder.appendingPathComponent("hub")
-        let snapshot = hub.appendingPathComponent("models--ggml-org--embeddinggemma-2-GGUF/snapshots/\(ModelFiles.revision)")
-        let blobs = hub.appendingPathComponent("models--ggml-org--embeddinggemma-2-GGUF/blobs")
+        let file = ModelFiles.File(name: "CoreML/tokenizer.json", bytes: 1024, sha256: "fixture",
+                                   repository: "fixture/model", revision: "pinned", remotePath: "tokenizer.json")
+        let absent = ModelFiles.File(name: "CoreML/weights.bin", bytes: 2048, sha256: "other",
+                                     repository: file.repository, revision: file.revision)
+        let snapshot = hub.appendingPathComponent("models--fixture--model/snapshots/pinned")
+        let blobs = hub.appendingPathComponent("models--fixture--model/blobs")
         try FileManager.default.createDirectory(at: snapshot, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: blobs, withIntermediateDirectories: true)
-        let blob = blobs.appendingPathComponent("2188ac1d")
+        let blob = blobs.appendingPathComponent("fixture-blob")
         FileManager.default.createFile(atPath: blob.path, contents: nil)
-        try FileHandle(forWritingTo: blob).truncate(atOffset: UInt64(ModelFiles.text.bytes))
-        try FileManager.default.createSymbolicLink(at: snapshot.appendingPathComponent(ModelFiles.text.name),
+        try FileHandle(forWritingTo: blob).truncate(atOffset: UInt64(file.bytes))
+        try FileManager.default.createSymbolicLink(at: snapshot.appendingPathComponent(file.remotePath),
                                                    withDestinationURL: blob)
         setEnvironment("HF_HUB_CACHE", hub.path)
         defer { setEnvironment("HF_HUB_CACHE", nil) }
-        #expect(ModelFiles.cachedCopy(of: ModelFiles.text)?.lastPathComponent == "2188ac1d")
-        #expect(ModelFiles.cachedCopy(of: ModelFiles.media) == nil)   // not there
+        #expect(ModelFiles.cachedCopy(of: file)?.lastPathComponent == "fixture-blob")
+        #expect(ModelFiles.cachedCopy(of: absent) == nil)   // not there
         try FileHandle(forWritingTo: blob).truncate(atOffset: 10)
-        #expect(ModelFiles.cachedCopy(of: ModelFiles.text) == nil)    // not whole
+        #expect(ModelFiles.cachedCopy(of: file) == nil)    // not whole
     }
 
     @Test func syncKeepsTheRowsOfAFolderThatWentAway() throws {

@@ -1,14 +1,14 @@
 import DigUpKit
 import Foundation
-import LlamaRuntime
 
-/// `digup worker [--text-only]`: EmbeddingGemma 2 on llama.cpp as a process, speaking the JSON-lines protocol of
+/// `digup worker [--text-only]`: the native Core ML or configured external runtime, speaking the JSON-lines protocol of
 /// `worker/digup_worker.py` (see `EmbeddingWorker`). The app runs one as its query encoder, so the model's memory
-/// goes back to the system when it exits. llama.cpp's warnings go to stderr.
+/// goes back to the system when it exits.
 func workerService(_ args: Arguments) -> Int32 {
-    let embedder: LlamaEmbedder
+    let embedder: any Embedder
     do {
-        embedder = try LlamaEmbedder(models: try LlamaModels.locate(), textOnly: args.flags.contains("--text-only"))
+        embedder = try makeEmbedder(textOnly: args.flags.contains("--text-only"),
+                                   log: args.indexFolder.appendingPathComponent("worker.log"))
     } catch {
         emit(["ready": false, "error": "\(error)"])
         return 1

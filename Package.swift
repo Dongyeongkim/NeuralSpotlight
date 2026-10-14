@@ -2,32 +2,25 @@
 import PackageDescription
 
 // DigUp builds on macOS (the app, the CLI and its helpers) and, since the port, the engine and the CLI on
-// Linux and Windows too. The manifest picks each platform's pieces: how llama.cpp is linked, the C libraries the engine
+// Linux and Windows too. The manifest picks each platform's pieces: Core ML on macOS, the C libraries the engine
 // needs where Apple's frameworks aren't there (SQLite, stb, miniz, PDFium: scripts/fetch-vendor.sh puts them in
 // Vendor/), and the app, which is macOS only.
 let vendor = "\(Context.packageDirectory)/Vendor"
 
 #if os(macOS)
-let llamaModule = "Sources/CLlama"                        // static llama.cpp with Metal (scripts/build-llama.sh)
-let llamaLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/llama/lib"])]
 let engineDependencies: [Target.Dependency] = []
 let engineLink: [LinkerSetting] = []
 let portableTargets: [Target] = []
 #else
-// llama.cpp as shared libraries: ggml's backends (CPU, and CUDA or Vulkan when the machine has them) load at run time
-// from beside the helper (`LlamaEmbedder`), so one build runs anywhere. Dev builds find them in Vendor/.
+// Portable builds keep extraction, storage, search and the external embedding-worker protocol.
+// Core ML is unavailable there; no native embedding runtime is bundled.
 #if os(Windows)
-// No rpath on Windows: the DLLs go beside digup.exe, or on PATH in dev runs. MSVC's C++ runtime needs no
-// link line of its own, so the module map differs from Linux's by that.
+// No rpath on Windows: the PDFium DLL goes beside digup.exe, or on PATH in dev runs.
 let runpath: [String] = []
-let llamaModule = "Sources/CLlamaWindows"
 #else
 let runpath = ["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN",
-               "-Xlinker", "-rpath", "-Xlinker", "\(vendor)/llama/lib",
                "-Xlinker", "-rpath", "-Xlinker", "\(vendor)/pdfium/lib"]
-let llamaModule = "Sources/CLlamaShared"
 #endif
-let llamaLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/llama/lib"] + runpath)]
 let engineDependencies: [Target.Dependency] = ["CSQLite", "CStb", "CMiniz", "CPDFium"]
 let engineLink: [LinkerSetting] = [.unsafeFlags(["-L\(vendor)/pdfium/lib"] + runpath)]
 let portableTargets: [Target] = [
@@ -50,12 +43,15 @@ let portableTargets: [Target] = [
 #endif
 
 #if os(macOS)
+let runtimeDependencies: [Target.Dependency] = ["CoreMLRuntime"]
 let appProducts: [Product] = [.executable(name: "DigUpApp", targets: ["DigUpApp"])]
 let appDependencies: [Package.Dependency] = [
     // In-app updates (the app only). build.sh embeds the framework in Contents/Frameworks and signs it.
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
 ]
 let appTargets: [Target] = [
+    .target(name: "CoreMLRuntime", dependencies: ["DigUpKit"], exclude: ["FluidUse-LICENSE.txt"]),
+    .testTarget(name: "CoreMLRuntimeTests", dependencies: ["CoreMLRuntime"], exclude: ["Reference"]),
     // The menubar + hotkey app. build.sh wraps it into build.noindex/DigUp.app. (The product can't be called
     // "DigUp": on a case-insensitive disk it would collide with the `digup` CLI binary.)
     .executableTarget(
@@ -66,6 +62,7 @@ let appTargets: [Target] = [
     ),
 ]
 #else
+let runtimeDependencies: [Target.Dependency] = []
 let appProducts: [Product] = []
 let appDependencies: [Package.Dependency] = []
 let appTargets: [Target] = []
@@ -73,26 +70,25 @@ let appTargets: [Target] = []
 
 let package = Package(
     name: "DigUp",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "digup", targets: ["digup"]),
         .library(name: "DigUpKit", targets: ["DigUpKit"]),
     ] + appProducts,
-    dependencies: appDependencies,
+    dependencies: appDependencies + [
+        // 2.25+ introduces a header-only NumKong target that Xcode's SwiftPM linker cannot consume.
+        .package(url: "https://github.com/unum-cloud/USearch", exact: "2.24.0"),
+    ],
     targets: portableTargets + [
         // The engine: crawler, extractors, index store, the embedder interface and worker client, search. No UI.
         // Platform/ holds what differs by OS (Apple's frameworks on macOS, the C libraries above elsewhere).
-        .target(name: "DigUpKit", dependencies: engineDependencies, linkerSettings: engineLink),
-        // llama.cpp (scripts/build-llama.sh builds it into Vendor/llama) and EmbeddingGemma 2 on it.
-        .systemLibrary(name: "CLlama", path: llamaModule),
-        .target(name: "LlamaRuntime", dependencies: ["CLlama", "DigUpKit"], linkerSettings: llamaLink),
+        .target(name: "DigUpKit", dependencies: engineDependencies + [.product(name: "USearch", package: "USearch")],
+                linkerSettings: engineLink),
         // Developer CLI: estimate / index / search / status / eval. Doubles as the eval harness, and the app runs it as
         // its indexing helper and its query encoder.
-        .executableTarget(name: "digup", dependencies: ["DigUpKit", "LlamaRuntime"]),
+        .executableTarget(name: "digup", dependencies: ["DigUpKit"] + runtimeDependencies),
         // Pictures/ holds ImageTests' pictures (scripts/testbed/make_test_pictures.swift) and Videos/ VideoTests' video,
         // read by path.
         .testTarget(name: "DigUpKitTests", dependencies: ["DigUpKit"], exclude: ["Pictures", "Videos"]),
-        // Reference/ holds the fixed inputs and vectors of ReferenceVectorTests, read by path.
-        .testTarget(name: "LlamaRuntimeTests", dependencies: ["LlamaRuntime"], exclude: ["Reference"]),
     ] + appTargets
 )

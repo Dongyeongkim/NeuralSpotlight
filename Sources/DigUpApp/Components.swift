@@ -2,21 +2,16 @@ import AppKit
 import DigUpKit
 import SwiftUI
 
-/// The app's own colors, from its icon (moss tiles around an amber D, `Resources/AppIcon`): amber marks what DigUp
-/// finds (accent icons), moss is for brand moments (onboarding's glow and tiles); selection and controls follow the
-/// system accent color like any Mac app.
+/// NeuralSpotlight: a cool spectrum, shared by the search mark and discovery surfaces.
 enum Brand {
-    static let amber = Color(red: 0.949, green: 0.635, blue: 0.165)    // #F2A22A, the D
-    static let ember = Color(red: 0.851, green: 0.482, blue: 0.102)    // #D97B1A, a deeper amber that holds up on white
-    static let moss = Color(red: 0.208, green: 0.400, blue: 0.322)     // #356652, the darkest tile
-    static let leaf = Color(red: 0.310, green: 0.502, blue: 0.345)     // #4F8058
-    static let sprout = Color(red: 0.635, green: 0.780, blue: 0.557)   // #A2C78E, a light tile
-    /// Accent icons: the D's amber.
-    static let gradient = LinearGradient(colors: [amber, ember], startPoint: .top, endPoint: .bottom)
-    /// Tiles with a white symbol on them, like the icon's.
-    static let tile = LinearGradient(colors: [leaf, moss], startPoint: .top, endPoint: .bottom)
-    /// The soft glow behind onboarding's steps.
-    static let wash = LinearGradient(colors: [sprout, leaf], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let cyan = Color(red: 0.18, green: 0.80, blue: 0.90)
+    static let blue = Color(red: 0.20, green: 0.42, blue: 0.88)
+    static let navy = Color(red: 0.10, green: 0.17, blue: 0.34)
+    static let indigo = Color(red: 0.38, green: 0.39, blue: 0.84)
+    static let mist = Color(red: 0.66, green: 0.81, blue: 0.96)
+    static let gradient = LinearGradient(colors: [cyan, blue], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let tile = LinearGradient(colors: [indigo, navy], startPoint: .topLeading, endPoint: .bottomTrailing)
+    static let wash = LinearGradient(colors: [mist, indigo], startPoint: .topLeading, endPoint: .bottomTrailing)
 }
 
 /// ⇧ ⌘ Space as keycaps.
@@ -140,6 +135,9 @@ extension FileKind {
         case .audio: one ? "audio file" : "audio files"
         case .video: one ? "video" : "videos"
         case .code: one ? "code file" : "code files"
+        case .file: one ? "file" : "files"
+        case .folder: one ? "folder" : "folders"
+        case .application: one ? "application" : "applications"
         }
         return "\(count.formatted()) \(noun)"
     }

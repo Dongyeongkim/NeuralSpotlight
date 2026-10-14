@@ -54,6 +54,8 @@ final class SearchPanelController {
     /// The generation whose final (meaning) results are showing; late keyword results must not replace them.
     @ObservationIgnored private var finalGeneration = -1
     @ObservationIgnored private var meaningTask: Task<Void, Never>?
+    @ObservationIgnored private var keywordTask: Task<Void, Never>?
+    @ObservationIgnored private var localTask: Task<Void, Never>?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var mouseMonitor: Any?
     @ObservationIgnored private var resignObserver: NSObjectProtocol?
@@ -164,6 +166,8 @@ final class SearchPanelController {
         typedAt = Date()
         navigated = false
         meaningTask?.cancel()
+        keywordTask?.cancel()
+        localTask?.cancel()
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let codeText = CodeQuery.text(of: typed)
         isCode = codeText != nil
@@ -184,19 +188,48 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
-        // Words now. The last word is probably half-typed, so it matches as a prefix.
-        Task {
+        // Each source updates independently. Late Spotlight results enrich the current meaning results instead
+        // of making the index wait, or replacing those results with a keyword-only list.
+        var localHits: [SearchHit] = []
+        var indexedHits: [SearchHit] = []
+        var indexedPhase = SearchPhase.words
+        var localFinished = code
+        var meaningFinished = false
+        let present = {
+            self.show(LocalSearch.merge(indexedHits, with: localHits, limit: 40), query: text, phase: indexedPhase)
+        }
+        let finish = {
+            if localFinished && meaningFinished { self.onFinalResults?() }
+        }
+        let showAt = ContinuousClock.now + Self.typingPause
+        if !code {
+            localTask = Task {
+                try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
+                guard !Task.isCancelled, current == generation else { return }
+                let started = Date()
+                let names = await engine.searchLocal(text)
+                guard !Task.isCancelled, current == generation else { return }
+                localHits = names
+                present()
+                log("search: system results \(names.count) hits in \(ms(since: started))")
+                localFinished = true
+                finish()
+            }
+        }
+        // Indexed words now. The last word is probably half-typed, so it matches as a prefix.
+        keywordTask = Task {
             let started = Date()
             let hits = await engine.search(text, vector: nil, prefixLast: true, code: code)
-            guard current == generation, finalGeneration != current else { return }
-            show(hits, query: text, phase: .words)
+            guard !Task.isCancelled, current == generation, finalGeneration != current else { return }
+            indexedHits = hits
+            present()
             log("search \"\(typed)\": words \(hits.count) hits in \(ms(since: started))")
         }
-        // Meaning results show once typing pauses, but they're computed now (embedding, then search), so they're
-        // ready by then: the pause is the whole wait.
-        engine.embedAhead(text, code: code)
-        let showAt = ContinuousClock.now + Self.typingPause   // counted from the keystroke, not from when the task runs
+        // Start model work once typing pauses, independently of Spotlight gathering.
         meaningTask = Task {
+            try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
+            guard !Task.isCancelled, current == generation else { return }
+            engine.embedAhead(text, code: code)
             let embedStarted = Date()
             let vector = await engine.embedQuery(text, code: code)
             guard !Task.isCancelled, current == generation else { return }
@@ -206,7 +239,9 @@ final class SearchPanelController {
             try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
             guard !Task.isCancelled, current == generation else { return }
             finalGeneration = current
-            show(hits, query: text, phase: vector == nil ? .wordsOnly : .meaning)
+            indexedHits = hits
+            indexedPhase = vector == nil ? .wordsOnly : .meaning
+            present()
             let shown = Date(), keystroke = typedAt
             log("search \"\(typed)\": \(vector == nil ? "words only" : "meaning") \(hits.count) hits "
                 + "(\(results.strongRows.count) strong) · embed \(ms(since: embedStarted, until: searchStarted)) · "
@@ -216,7 +251,8 @@ final class SearchPanelController {
                 // The next turn of the main loop: the list and the preview pane have been laid out and drawn.
                 log("search \"\(typed)\": drawn by \(ms(since: keystroke)) after the last keystroke")
             }
-            onFinalResults?()
+            meaningFinished = true
+            finish()
         }
     }
 
@@ -433,6 +469,7 @@ final class SearchPanelController {
 
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
+        if let row = selectedRow { engine.recordUses([FileUse(path: row.id, date: Date())], source: "preview") }
         window?.previewURL = selectedRow?.url
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(selectedRow, in: QLPreviewPanel.shared())

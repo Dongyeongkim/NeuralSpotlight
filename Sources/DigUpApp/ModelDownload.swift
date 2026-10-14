@@ -3,7 +3,7 @@ import DigUpKit
 import Foundation
 import Observation
 
-/// Gets the model onto this Mac: ggml-org's two Q8_0 files from Hugging Face (865 MB), the text part first.
+/// Gets the pinned Core ML text, image and audio models onto this Mac.
 ///
 /// - Resumable: a file downloads into `<name>.partial`, and an interrupted download carries on from where it stopped
 ///   (an HTTP range), after a relaunch too.
@@ -15,7 +15,7 @@ import Observation
 ///
 /// This is the app's only network use. It starts when onboarding's Get Started is clicked, or at launch when a set-up
 /// app finds its model missing (an update that brings a new model). A file that's already in the Hugging Face cache
-/// (`hf download`, llama.cpp users) is copied from there instead (an APFS clone: no time, no space), and checked the same.
+/// (`hf download`) is copied from there instead and checked the same way.
 /// So are files chosen by hand (`use`), for networks that block Hugging Face.
 @Observable
 final class ModelDownload {
@@ -29,13 +29,17 @@ final class ModelDownload {
     }
 
     private(set) var phase: Phase
-    /// Bytes on disk over both files, what earlier runs left included.
+    /// Bytes on disk over every model asset, including files left by earlier runs.
     private(set) var received: Int64 = 0
     private(set) var bytesPerSecond: Double = 0
-    let total = ModelFiles.totalBytes
+    let files: [ModelFiles.File]
+    let total: Int64
     let folder: URL
 
     @ObservationIgnored var onReady: () -> Void = {}
+    /// Text assets arrive first, so query preparation can overlap the remaining image/audio download.
+    @ObservationIgnored var onTextReady: () -> Void = {}
+    @ObservationIgnored private var textReadyReported = false
     @ObservationIgnored private var fetcher: FileFetcher?
     @ObservationIgnored private var retryWork: DispatchWorkItem?
     @ObservationIgnored private var failuresInARow = 0
@@ -47,10 +51,17 @@ final class ModelDownload {
     /// Files whose `.partial` was chosen by hand (`use`): one that fails its check says so rather than downloading.
     @ObservationIgnored private var chosen = Set<String>()
 
-    init(folder: URL) {
+    init(folder: URL, backend: EmbeddingBackend = .automatic) {
         self.folder = folder
-        phase = ModelFiles.missing(in: folder).isEmpty ? .ready : .needed
+        files = backend.modelFiles
+        total = files.reduce(0) { $0 + $1.bytes }
+        phase = files.allSatisfy { FileFetcher.size(of: folder.appendingPathComponent($0.name)) == $0.bytes }
+            ? .ready : .needed
         received = bytesOnDisk()
+    }
+
+    private var missing: [ModelFiles.File] {
+        files.filter { FileFetcher.size(of: folder.appendingPathComponent($0.name)) != $0.bytes }
     }
 
     var isReady: Bool { phase == .ready }
@@ -94,7 +105,11 @@ final class ModelDownload {
     }
 
     private func next() {
-        guard let file = ModelFiles.missing(in: folder).first else {
+        if !textReadyReported, CoreMLModelFiles.complete(in: folder.appendingPathComponent("CoreML"), textOnly: true) {
+            textReadyReported = true
+            onTextReady()
+        }
+        guard let file = missing.first else {
             phase = .ready
             received = total
             log("model: ready in \(tildePath(folder.path))")
@@ -112,7 +127,7 @@ final class ModelDownload {
             log("model: can't create \(folder.path): \(error)")
             return
         }
-        let needed = ModelFiles.missing(in: folder).reduce(0) { $0 + $1.bytes } - partialBytes(of: file) + 200_000_000
+        let needed = missing.reduce(0) { $0 + $1.bytes } - partialBytes(of: file) + 800_000_000
         if let free = freeSpace(), free < needed {
             phase = .failed("Needs \(bytes(needed)) free on this disk")
             log("model: needs \(bytes(needed)) free, \(bytes(free)) is free")
@@ -122,6 +137,7 @@ final class ModelDownload {
             phase = .verifying
             let partial = folder.appendingPathComponent(file.name + ".partial")
             DispatchQueue.global(qos: .utility).async {
+                try? FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(at: partial)
                 let copied = (try? FileManager.default.copyItem(at: cached, to: partial)) != nil
                 DispatchQueue.main.async { [weak self] in
@@ -198,15 +214,25 @@ final class ModelDownload {
                 let size = FileFetcher.size(of: partial)
                 let hash = size == file.bytes ? try? ModelFiles.sha256(of: partial) : nil
                 let good = hash == file.sha256
+                var saveError: String?
                 if good {
                     let destination = folder.appendingPathComponent(file.name)
-                    try? FileManager.default.removeItem(at: destination)
-                    try? FileManager.default.moveItem(at: partial, to: destination)
+                    do {
+                        if FileManager.default.fileExists(atPath: destination.path) {
+                            try FileManager.default.removeItem(at: destination)
+                        }
+                        try FileManager.default.moveItem(at: partial, to: destination)
+                    } catch { saveError = error.localizedDescription }
                 } else {
                     try? FileManager.default.removeItem(at: partial)
                 }
+                let failure = saveError
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
+                    if let failure {
+                        phase = .failed("Can't save the model: \(failure)")
+                        return
+                    }
                     log("model: \(file.name) \(good ? "checked" : "FAILED its check (\(size) of \(file.bytes) bytes)") in "
                         + "\(ms(since: started)), downloaded in \(String(format: "%.1f s", seconds))")
                     if good {
@@ -250,24 +276,48 @@ final class ModelDownload {
 
     // MARK: Files chosen by hand
 
-    /// The model's two files, got some other way (on another network, from a mirror, a colleague's copy) where
-    /// Hugging Face is blocked. Each goes where a download would put it (`<name>.partial`; an APFS clone when it can
+    /// Model files, a Models/CoreML folder, or a Core ML package obtained on another network or from a mirror.
+    /// Each goes where a download would put it (`<name>.partial`; an APFS clone when it can
     /// be) and is checked the same way, size and SHA-256, before it's used. A file counts by its size, and so by its
     /// name only at the right size (a smaller one would be taken for a download to resume). What's still missing
     /// afterwards downloads as usual.
     func use(_ urls: [URL]) {
         var picked: [(file: ModelFiles.File, url: URL)] = []
         var problem = "Those aren't the model's files"
-        for url in urls {
+        let needed = missing
+        func consider(_ original: URL, expected: ModelFiles.File? = nil) {
+            let url = original.resolvingSymlinksInPath()
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return }
             let size = FileFetcher.size(of: url)
-            guard let file = ModelFiles.all.first(where: { $0.bytes == size }) else {
-                if let named = ModelFiles.all.first(where: { $0.name == url.lastPathComponent }) {
+            guard let file = expected ?? files.first(where: { $0.bytes == size }), file.bytes == size else {
+                if let named = expected ?? files.first(where: { ($0.name as NSString).lastPathComponent == url.lastPathComponent }) {
                     problem = "The chosen \(named.name) is \(bytes(size)), not \(bytes(named.bytes))"
                 }
+                return
+            }
+            let wanted = needed.contains(file) && !picked.contains { $0.file == file }
+            if wanted { picked.append((file, url)) }
+        }
+        for original in urls {
+            let url = original.resolvingSymlinksInPath()
+            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else {
+                consider(url)
                 continue
             }
-            let wanted = ModelFiles.missing(in: folder).contains(file) && !picked.contains { $0.file == file }
-            if wanted { picked.append((file, url)) }
+            for file in needed {
+                // Only probe manifest paths: no recursive scan of a selected folder or package.
+                // Models/ uses the installation name; CoreML/ or an HF snapshot uses the remote path.
+                var relativePaths = [file.name, file.remotePath]
+                let components = file.remotePath.split(separator: "/")
+                if url.pathExtension.lowercased() == "mlpackage",
+                   components.first?.hasSuffix(".mlpackage") == true {
+                    relativePaths.append(components.dropFirst().joined(separator: "/"))
+                }
+                var seen = Set<String>()
+                for relative in relativePaths where seen.insert(relative).inserted {
+                    consider(url.appendingPathComponent(relative), expected: file)
+                }
+            }
         }
         guard !picked.isEmpty else {
             log("model: none of the chosen files is a model file (\(urls.map(\.lastPathComponent))): \(problem)")
@@ -285,6 +335,12 @@ final class ModelDownload {
             var copied: [String] = []
             for (file, url) in picked {
                 let partial = folder.appendingPathComponent(file.name + ".partial")
+                // A user can select an already-downloaded .partial file in this folder. Check it in place.
+                if url.standardizedFileURL == partial.standardizedFileURL {
+                    copied.append(file.name)
+                    continue
+                }
+                try? FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(at: partial)
                 if (try? FileManager.default.copyItem(at: url, to: partial)) != nil { copied.append(file.name) }
             }
@@ -302,11 +358,12 @@ final class ModelDownload {
     func chooseFiles(for window: NSWindow?) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
+        panel.treatsFilePackagesAsDirectories = false   // selecting an .mlpackage imports its known files together
         panel.allowsMultipleSelection = true
         panel.prompt = "Use"
-        panel.message = "Choose the model files you downloaded: "
-            + ModelFiles.all.map(\.name).joined(separator: " and ") + "."
+        panel.message = "Choose your downloaded model files, their folder, or a Core ML model package. "
+            + "Each file is checked before use; missing files will download automatically."
         let finish = { [weak self] (response: NSApplication.ModalResponse) in
             guard response == .OK else { return }
             self?.use(panel.urls)
@@ -318,9 +375,9 @@ final class ModelDownload {
         }
     }
 
-    /// Where the two files download from (the pinned revision), one a line: to fetch them on another network.
-    static var links: String {
-        ModelFiles.all.map(\.url.absoluteString).joined(separator: "\n")
+    /// Where the files download from (the pinned revisions), one a line: to fetch them on another network.
+    var links: String {
+        files.map(\.url.absoluteString).joined(separator: "\n")
     }
 
     // MARK: Disk
@@ -330,11 +387,11 @@ final class ModelDownload {
     }
 
     private func completedBytes() -> Int64 {
-        ModelFiles.all.filter { !ModelFiles.missing(in: folder).contains($0) }.reduce(0) { $0 + $1.bytes }
+        files.filter { !missing.contains($0) }.reduce(0) { $0 + $1.bytes }
     }
 
     private func bytesOnDisk() -> Int64 {
-        completedBytes() + ModelFiles.missing(in: folder).reduce(0) { $0 + min(partialBytes(of: $1), $1.bytes) }
+        completedBytes() + missing.reduce(0) { $0 + min(partialBytes(of: $1), $1.bytes) }
     }
 
     private func size(of url: URL) -> Int64 {
@@ -355,4 +412,3 @@ final class ModelDownload {
 nonisolated func bytes(_ count: Int64) -> String {
     ByteCountFormatter.string(fromByteCount: count, countStyle: .file)
 }
-

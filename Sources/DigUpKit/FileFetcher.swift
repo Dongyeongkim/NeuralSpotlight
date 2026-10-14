@@ -100,6 +100,7 @@ public final class FileFetcher: NSObject, URLSessionDataDelegate, @unchecked Sen
             return completionHandler(.cancel)
         }
         do {
+            try FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
             if !FileManager.default.fileExists(atPath: partial.path) {
                 FileManager.default.createFile(atPath: partial.path, contents: nil)
             }

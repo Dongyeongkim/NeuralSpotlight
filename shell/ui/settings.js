@@ -391,7 +391,7 @@ function renderStorage() {
   pathButton($("model-path"), storage.models);
   $("index-size").textContent = bytes(storage.indexBytes || 0) + (storage.codeBytes ? ` (code ${bytes(storage.codeBytes)})` : "");
   pathButton($("index-path"), storage.index);
-  $("version").textContent = `DigUp ${info.version || ""} · EmbeddingGemma 2 by Google (Apache 2.0), run by llama.cpp (MIT).`;
+  $("version").textContent = `DigUp ${info.version || ""} · Semantic embedding uses your configured external worker on this platform.`;
 }
 
 /// A folder's path; a click shows it in the file manager.

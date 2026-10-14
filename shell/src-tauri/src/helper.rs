@@ -22,7 +22,7 @@ pub struct Launch {
     pub program: PathBuf,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    /// Where its standard error goes (llama.cpp and the helper write their warnings there).
+    /// Where its standard error goes (the helper and its configured embedding worker write warnings there).
     pub log: Option<PathBuf>,
     /// Work in the background (indexing, the download): below the person's own programs for the processor.
     pub background: bool,

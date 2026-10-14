@@ -1,7 +1,7 @@
 #!/bin/bash
-# Builds DigUp for Linux as a .deb and an AppImage: the Tauri shell (shell/), with DigUp's helper, llama.cpp, PDFium and
-# ffmpeg inside. Run it on the CPU architecture the packages are for, after scripts/fetch-vendor.sh and
-# scripts/build-llama.sh. Needs Swift, Rust, Tauri's CLI (`cargo install tauri-cli --version "^2"`, else Node runs it from
+# Builds DigUp for Linux as a .deb and an AppImage: the Tauri shell (shell/), helper, PDFium and ffmpeg.
+# Semantic embedding requires an explicitly provisioned external worker; Core ML is macOS only.
+# Run after scripts/fetch-vendor.sh. Needs Swift, Rust, Tauri's CLI (`cargo install tauri-cli --version "^2"`, else Node runs it from
 # npm), patchelf, and what scripts/build-ffmpeg.sh needs (it builds the small ffmpeg the packages carry):
 #   scripts/package-linux.sh       → shell/src-tauri/target/release/bundle/{deb,appimage}/
 set -euo pipefail
@@ -18,20 +18,12 @@ for library in _CFURLSessionInterface curl CoreFoundation _FoundationICU Foundat
 done
 swift build -c release --product digup --static-swift-stdlib --scratch-path .build/static "${late[@]}"
 
-# What the packages carry beside the shell (shell/src-tauri/helper): the helper finds llama.cpp's backends and ffmpeg
+# What the packages carry beside the shell (shell/src-tauri/helper): the helper finds PDFium and ffmpeg
 # in its own folder, and each library finds the others there ($ORIGIN, not the build's folders).
 helper=shell/src-tauri/helper
 rm -rf "$helper"
 mkdir -p "$helper"
 cp .build/static/release/digup Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$helper/"
-for file in Vendor/llama/lib/*.so*; do
-  name=${file##*/}
-  if [[ -L $file && $name =~ \.so\.[0-9]+$ ]]; then
-    cp -L "$file" "$helper/"   # once, under the name the helper asks for (libllama.so.0)
-  elif [[ ! -L $file && $name == *.so ]]; then
-    cp "$file" "$helper/"      # llama.cpp's backends (libggml-cpu-*.so), loaded by path
-  fi
-done
 for file in "$helper"/digup "$helper"/*.so*; do
   patchelf --set-rpath '$ORIGIN' "$file"
 done

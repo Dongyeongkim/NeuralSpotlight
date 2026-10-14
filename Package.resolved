@@ -1,5 +1,5 @@
 {
-  "originHash" : "23ef967e422558ab1161cd009bb19dc5cb4b48f087f3d588c0e253fedf19490f",
+  "originHash" : "1a6fdd72730a852610972358cd646b4c419b58bc5ee4dcc17caf955ec086744d",
   "pins" : [
     {
       "identity" : "sparkle",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "eef1a539a373c1f1a320624b1130fc5de7b2e100",
         "version" : "2.10.0"
+      }
+    },
+    {
+      "identity" : "usearch",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/unum-cloud/USearch",
+      "state" : {
+        "revision" : "40d127f472e9073875566f0e9308c0302b89100a",
+        "version" : "2.24.0"
       }
     }
   ],

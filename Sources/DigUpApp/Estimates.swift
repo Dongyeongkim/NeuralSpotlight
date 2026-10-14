@@ -16,7 +16,7 @@ nonisolated struct FolderEstimate: Identifiable, Sendable {
     var longFiles = 0
     /// For code search: about how big its part of the code index gets on disk.
     var bytes = 0.0
-    /// False when macOS doesn't let DigUp read the folder (it was denied in the privacy prompt).
+    /// False when macOS doesn't let NeuralSpotlight read the folder (it was denied in the privacy prompt).
     let readable: Bool
     /// The estimate never came (the helper stopped early).
     var failed = false
@@ -38,7 +38,7 @@ enum Estimates {
                     update: @escaping @MainActor @Sendable (FolderEstimate) -> Void) -> Process? {
         let process = Process()
         process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup")
-        var arguments = ["estimate", "--json"]
+        var arguments = ["estimate", "--json", "--rich-content-only"]
         if let indexDirectory { arguments += ["--index", indexDirectory.path] }
         if code { arguments.append("--code") }
         for folder in excluded { arguments += ["--exclude", folder.path] }

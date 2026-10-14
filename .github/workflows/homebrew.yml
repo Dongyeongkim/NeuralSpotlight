@@ -38,9 +38,9 @@ jobs:
           xcrun stapler validate release.dmg
           mount=$(mktemp -d)
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" release.dmg > /dev/null
-          codesign --verify --deep --strict --verbose=2 "$mount/DigUp.app"
-          codesign -dv "$mount/DigUp.app" 2>&1 | grep -qx "TeamIdentifier=$team"
-          xcrun stapler validate "$mount/DigUp.app"
+          codesign --verify --deep --strict --verbose=2 "$mount/NeuralSpotlight.app"
+          codesign -dv "$mount/NeuralSpotlight.app" 2>&1 | grep -qx "TeamIdentifier=$team"
+          xcrun stapler validate "$mount/NeuralSpotlight.app"
           hdiutil detach "$mount" > /dev/null
           sha256=$(shasum -a 256 release.dmg | cut -d' ' -f1)
           rm release.dmg

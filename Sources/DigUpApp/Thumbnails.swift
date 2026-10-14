@@ -16,6 +16,11 @@ final class Thumbnails {
 
     func load(_ url: URL, side: CGFloat, scale: CGFloat) async -> NSImage? {
         if let image = cached(url, side: side) { return image }
+        if url.pathExtension.lowercased() == "app" || (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            let image = NSWorkspace.shared.icon(forFile: url.path)
+            cache.setObject(image, forKey: "\(Int(side)) \(url.path)" as NSString)
+            return image
+        }
         inFlight += 1
         defer {
             inFlight -= 1

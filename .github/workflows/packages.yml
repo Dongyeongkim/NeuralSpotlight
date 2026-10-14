@@ -1,11 +1,8 @@
 # Builds DigUp for Windows and Linux on x64: the shell's Windows installer, and its .deb and AppImage, kept as the run's
 # artifacts (nothing is published). By hand: `gh workflow run packages.yml`, or `-f ref=<branch or tag>`. The Mac app is
-# built and released on a Mac (scripts/release.sh). llama.cpp gets its Vulkan backend beside the CPU ones (the Vulkan
-# SDK's shader compiler is what makes scripts/build-llama.sh build it): a computer whose GPU runs the model faster than
-# its processor uses it (`digup speed --model` decides), any other the processor. Each package is then installed and
-# launched once, hidden (scripts/check-*-package.sh): the .deb and the AppImage on Ubuntu 22.04 and 24.04 and Debian 12,
-# the installer on Windows. With the update signing key in the repository's secrets, the installer and the AppImage
-# come with the .sig files the update feed needs (scripts/update-feed.py).
+# built and released on a Mac (scripts/release.sh). Portable packages include extraction and search plus an external
+# embedding-worker protocol. Their installed helpers must clearly report that native Core ML is unavailable.
+# With the update signing key, the installer and AppImage include signatures for the update feed.
 name: Packages
 
 on:
@@ -31,7 +28,7 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends ca-certificates curl git gnupg \
             xz-utils unzip python3 binutils build-essential cmake ninja-build meson nasm pkg-config patchelf file \
             zlib1g-dev libcurl4-openssl-dev libxml2-dev libedit2 libsqlite3-0 libz3-dev libpython3-dev tzdata \
-            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev libvulkan1
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -57,19 +54,6 @@ jobs:
           echo "2f2c0da162318f0de47665410c7c8c2ed3d36c8f3105de4bbc61176c70a7cbf2  $RUNNER_TEMP/node.tar.xz" | sha256sum -c -
           tar -xJf "$RUNNER_TEMP/node.tar.xz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/$node/bin" >> "$GITHUB_PATH"
-      - name: Vulkan SDK
-        # Its shader compiler and headers (Ubuntu 22.04 has no glslc); the backend loads the system's Vulkan at run time.
-        run: |
-          version=1.4.363.0
-          curl -fsSL -o "$RUNNER_TEMP/vulkansdk.tar.xz" \
-            "https://sdk.lunarg.com/sdk/download/$version/linux/vulkansdk-linux-x86_64-$version.tar.xz"
-          echo "197962f5cbf80baf2775a03336a01cee7c8745686c65aaa70d3f751ade4d7e43  $RUNNER_TEMP/vulkansdk.tar.xz" | sha256sum -c -
-          tar -xJf "$RUNNER_TEMP/vulkansdk.tar.xz" -C "$RUNNER_TEMP"
-          rm "$RUNNER_TEMP/vulkansdk.tar.xz"
-          sdk=$RUNNER_TEMP/$version/x86_64
-          echo "VULKAN_SDK=$sdk" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$sdk:$sdk/lib/VulkanLoader" >> "$GITHUB_ENV"
-          echo "$sdk/bin" >> "$GITHUB_PATH"
       - name: Build
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1   # Tauri's AppImage tools are AppImages, and a container has no FUSE
@@ -77,7 +61,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           scripts/fetch-vendor.sh
-          scripts/build-llama.sh
           scripts/package-linux.sh
       - name: Check the glibc asked for
         run: |
@@ -96,7 +79,7 @@ jobs:
 
   linux-check:
     # The packages installed where people will: a bare container of each distribution (the .deb brings what it needs),
-    # then a hidden first launch.
+    # then the installed helper and its unsupported-native error contract.
     needs: linux
     runs-on: ubuntu-24.04
     strategy:
@@ -120,18 +103,14 @@ jobs:
         with:
           name: DigUp-linux-x64
           path: packages   # as the bundle had them: deb/ and appimage/
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: models
-          key: embeddinggemma-2-q8_0-bfcd298
       - name: The .deb
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -q ./packages/deb/*.deb
-          MODELS="$PWD/models" scripts/check-linux-package.sh /usr/bin/digup-shell
+          scripts/check-linux-package.sh /usr/bin/digup-shell
       - name: The AppImage
         run: |
           chmod +x packages/appimage/*.AppImage
-          MODELS="$PWD/models" scripts/check-linux-package.sh packages/appimage/*.AppImage
+          scripts/check-linux-package.sh packages/appimage/*.AppImage
       - name: The update signature
         # Signed with the repository's key (once its secrets are set), the AppImage's signature must match the public key
         # installed copies check updates with (tauri.conf.json), or no update could ever be installed.
@@ -158,17 +137,6 @@ jobs:
           swift-version: swift-6.4.0-release
           swift-build: 6.4.0-RELEASE
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
-      - name: Vulkan SDK
-        shell: bash
-        run: |
-          version=1.4.363.0
-          temp=$(cygpath -u "$RUNNER_TEMP")
-          curl -fsSL -o "$temp/vulkansdk.exe" \
-            "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
-          echo "94a82d378f7a5e3e54c9db7d2fb7016af136e14ac0a18dbf0f2f67a36352d141  $temp/vulkansdk.exe" | sha256sum -c -
-          "$temp/vulkansdk.exe" --root "C:\\VulkanSDK\\$version" --accept-licenses --default-answer --confirm-command install
-          echo "VULKAN_SDK=C:\\VulkanSDK\\$version" >> "$GITHUB_ENV"
-          echo "C:\\VulkanSDK\\$version\\Bin" >> "$GITHUB_PATH"
       - name: Build
         shell: bash
         run: |
@@ -183,7 +151,6 @@ jobs:
           echo "7157177b8a6cb2174c1650ba8c71b363f2c78cba5330f88c4c02cf5b2b880646  $temp/ffmpeg.zip" | sha256sum -c -
           unzip -q "$temp/ffmpeg.zip" -d "$temp"
           scripts/fetch-vendor.sh
-          scripts/build-llama.sh
           FFMPEG="$temp/$ffmpeg/bin" scripts/package-windows.sh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -194,10 +161,6 @@ jobs:
           path: |
             shell/src-tauri/target/release/bundle/nsis/*.exe
             shell/src-tauri/target/release/bundle/nsis/*.exe.sig
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: models
-          key: embeddinggemma-2-q8_0-bfcd298-windows
       - name: The installer
         shell: bash
-        run: MODELS="$PWD/models" scripts/check-windows-package.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe
+        run: scripts/check-windows-package.sh shell/src-tauri/target/release/bundle/nsis/*-setup.exe

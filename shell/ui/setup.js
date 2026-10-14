@@ -479,7 +479,7 @@ function renderProgress() {
     fraction = model.total ? model.bytes / model.total : 0;
     const rate = downloadRate();
     time = `${Math.floor(fraction * 100)}%` + (rate > 0 && model.total ? ` · about ${roughDuration((model.total - model.bytes) / rate)} left` : "");
-    note = "865 MB, once. DigUp starts reading your files when it's in; until then, search finds files by name.";
+    note = "Configure an external embedding worker for this platform. File names remain searchable.";
     if (model.problem) note = `${model.problem}; trying again.`;
   } else if (model.state === "waiting") {
     label = "Waiting for the network to download the model";

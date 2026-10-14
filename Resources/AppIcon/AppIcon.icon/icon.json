@@ -1,28 +1,5 @@
 {
-  "fill" : {
-    "solid" : "srgb:0.07451,0.12549,0.10196,1.00000"
-  },
-  "groups" : [
-    {
-      "layers" : [
-        {
-          "image-name" : "d-mark.svg",
-          "name" : "d-mark"
-        }
-      ],
-      "name" : "D"
-    },
-    {
-      "layers" : [
-        {
-          "image-name" : "tiles.svg",
-          "name" : "tiles"
-        }
-      ],
-      "name" : "Tiles"
-    }
-  ],
-  "supported-platforms" : {
-    "squares" : "shared"
-  }
+  "fill": { "solid": "srgb:0.055,0.09,0.19,1.00000" },
+  "groups": [{ "layers": [{ "image-name": "neural-mark.png", "name": "Neural lens" }], "name": "NeuralSpotlight" }],
+  "supported-platforms": { "squares": "shared" }
 }

@@ -46,7 +46,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
         window.toolbarStyle = .unified
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.title = "DigUp"
+        window.title = "NeuralSpotlight"
         window.minSize = NSSize(width: 820, height: 520)
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -166,6 +166,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
 
     /// Quick Look shows the selected result at its page or moment.
     private func updateQuickLook() {
+        search.recordPreview()
         window?.previewURL = search.selectedRow?.url
         QLPreviewPanel.shared().reloadData()
         QuickLookMoment.show(search.selectedRow, in: QLPreviewPanel.shared())
@@ -221,6 +222,11 @@ final class SearchModel {
     @ObservationIgnored private let engine: Engine
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var localTask: Task<Void, Never>?
+    @ObservationIgnored private var localHits: [SearchHit] = []
+    @ObservationIgnored private var shownLocalHits: [SearchHit] = []
+    @ObservationIgnored private var indexHits: [SearchHit] = []
+    @ObservationIgnored private var shownIndexHits: [SearchHit] = []
 
     init(engine: Engine) {
         self.engine = engine
@@ -255,6 +261,10 @@ final class SearchModel {
         engine.open(row)
     }
 
+    func recordPreview() {
+        if let row = selectedRow { engine.recordUses([FileUse(path: row.id, date: Date())], source: "preview") }
+    }
+
     func move(by step: Int) {
         let ids = rows.map(\.id)
         guard !ids.isEmpty else { return }
@@ -267,6 +277,11 @@ final class SearchModel {
         generation += 1
         let current = generation
         task?.cancel()
+        localTask?.cancel()
+        localHits = []
+        shownLocalHits = []
+        indexHits = []
+        shownIndexHits = []
         navigated = false
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = isCode
@@ -286,11 +301,13 @@ final class SearchModel {
             return
         }
         engine.prewarm()
-        engine.embedAhead(text, code: code)
         let filter = self.filter
         let showAt = ContinuousClock.now + SearchPanelController.typingPause
         if code {
             task = Task {
+                try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
+                guard !Task.isCancelled, current == generation else { return }
+                engine.embedAhead(text, code: true)
                 let vector = await engine.embedQuery(text, code: true)
                 guard !Task.isCancelled, current == generation else { return }
                 let hits = await engine.search(text, vector: vector, prefixLast: false, limit: 120, code: true)
@@ -305,24 +322,61 @@ final class SearchModel {
             }
             return
         }
+        localTask = Task {
+            try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
+            guard !Task.isCancelled, current == generation else { return }
+            // Filter before limiting candidates: unrelated kinds must not crowd the selected kind out.
+            let names = await engine.searchLocal(text, kinds: filter?.kinds, limit: 120)
+            guard !Task.isCancelled, current == generation else { return }
+            localHits = names
+            shownLocalHits = names
+            publish(text: text, filter: filter)
+            if filter != nil {
+                // Counts for the other filter buttons arrive independently of the selected kind's full shortlist.
+                let allNames = await engine.searchLocal(text, limit: 120)
+                guard !Task.isCancelled, current == generation else { return }
+                localHits = allNames
+                publish(text: text, filter: filter)
+            }
+        }
         task = Task {
+            // SQLite and the encoder proceed independently of Spotlight, which may be slow on a cold query.
+            let immediate = await engine.search(text, vector: nil, prefixLast: true, limit: 120)
+            guard !Task.isCancelled, current == generation else { return }
+            indexHits = immediate
+            shownIndexHits = filter.map { kind in immediate.filter { kind.kinds.contains($0.kind) } } ?? immediate
+            publish(text: text, filter: filter)
+            try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
+            guard !Task.isCancelled, current == generation else { return }
+            engine.embedAhead(text)
             let vector = await engine.embedQuery(text)
             guard !Task.isCancelled, current == generation else { return }
             let all = await engine.search(text, vector: vector, prefixLast: false, limit: 120)
+            guard !Task.isCancelled, current == generation else { return }
             let shown = filter == nil ? all : await engine.search(text, vector: vector, prefixLast: false,
                                                                     kinds: filter!.kinds, limit: 120)
             try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
             guard !Task.isCancelled, current == generation else { return }
-            var counts: [ResultGroupKind: Int] = [:]
-            for hit in all.prefix(Searcher.strongCount(all)) { counts[ResultGroupKind(hit.kind), default: 0] += 1 }
-            self.counts = counts
-            results = ResultSet(shown, query: text)
+            indexHits = all
+            shownIndexHits = shown
             showWeaker = false
-            if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
-            hasResults = true
+            publish(text: text, filter: filter)
             log("window: \"\(text)\"\(filter.map { " in \($0.title)" } ?? ""): \(results.ranked.count) results "
                 + "+ \(results.weaker.count) weaker")
         }
+    }
+
+    /// Merge whichever providers have arrived with their latest results. A late Spotlight response supplements
+    /// meaning results already on screen rather than replacing them with filename-only matches.
+    private func publish(text: String, filter: ResultGroupKind?) {
+        let all = LocalSearch.merge(indexHits, with: localHits, limit: 120)
+        let shown = filter == nil ? all : LocalSearch.merge(shownIndexHits, with: shownLocalHits, limit: 120)
+        var counts: [ResultGroupKind: Int] = [:]
+        for hit in all.prefix(Searcher.strongCount(all)) { counts[ResultGroupKind(hit.kind), default: 0] += 1 }
+        self.counts = counts
+        results = ResultSet(shown, query: text)
+        if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
+        hasResults = true
     }
 }
 
@@ -422,7 +476,7 @@ struct SearchWindowView: View {
             VStack(spacing: 0) {
                 BrandMark()
                 Text("Choose folders to search").font(.system(size: 20, weight: .bold)).padding(.top, 18)
-                Text("DigUp only looks where you tell it to.")
+                Text("NeuralSpotlight only looks where you tell it to.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
@@ -469,8 +523,8 @@ struct SearchWindowView: View {
                 Button {
                     app.updates.checkNow()
                 } label: {
-                    Label("DigUp \(version) is available", systemImage: "arrow.down.circle.fill")
-                        .foregroundStyle(Brand.ember)
+                    Label("NeuralSpotlight \(version) is available", systemImage: "arrow.down.circle.fill")
+                        .foregroundStyle(Brand.blue)
                 }
                 .buttonStyle(.plain)
                 .help("See what's new and update")
@@ -503,21 +557,23 @@ private struct KindFilters: View {
     var showsCode = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            chip(title: "All", symbol: nil, count: nil, selected: search.filter == nil && !search.isCode) {
-                search.filter = nil
-            }
-            ForEach(ResultGroupKind.files, id: \.self) { kind in
-                chip(title: kind.title, symbol: kind.symbol, count: search.isCode ? nil : search.counts[kind],
-                     selected: search.filter == kind && !search.isCode) {
-                    search.filter = search.filter == kind ? nil : kind
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip(title: "All", symbol: nil, count: nil, selected: search.filter == nil && !search.isCode) {
+                    search.filter = nil
                 }
-            }
-            if showsCode {
-                Divider().frame(height: 16).padding(.horizontal, 4)
-                chip(title: "Code", symbol: FileKind.code.symbol, count: search.isCode ? search.counts[.code] : nil,
-                     selected: search.isCode, shortcut: 7) {
-                    search.filter = search.filter == .code ? nil : .code
+                ForEach(ResultGroupKind.files, id: \.self) { kind in
+                    chip(title: kind.title, symbol: kind.symbol, count: search.isCode ? nil : search.counts[kind],
+                         selected: search.filter == kind && !search.isCode) {
+                        search.filter = search.filter == kind ? nil : kind
+                    }
+                }
+                if showsCode {
+                    Divider().frame(height: 16).padding(.horizontal, 4)
+                    chip(title: "Code", symbol: FileKind.code.symbol, count: search.isCode ? search.counts[.code] : nil,
+                         selected: search.isCode, shortcut: 7) {
+                        search.filter = search.filter == .code ? nil : .code
+                    }
                 }
             }
         }
@@ -525,7 +581,8 @@ private struct KindFilters: View {
 
     private func chip(title: String, symbol: String?, count: Int?, selected: Bool, shortcut: Int? = nil,
                       action: @escaping () -> Void) -> some View {
-        let number = shortcut ?? (ResultGroupKind.files.firstIndex { $0.title == title }).map { $0 + 2 } ?? 1
+        let number: Int? = shortcut ?? (title == "All" ? 1 : ResultGroupKind.files.prefix(5)
+            .firstIndex { $0.title == title }.map { $0 + 2 })
         return Button(action: action) {
             HStack(spacing: 5) {
                 if let symbol { Image(systemName: symbol).font(.system(size: 10.5)) }
@@ -543,7 +600,7 @@ private struct KindFilters: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("\(title) (⌘\(number))")
+        .help(title + (number.map { " (⌘\($0))" } ?? ""))
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
@@ -741,7 +798,7 @@ private struct CodeOffOrHint: View {
                 .foregroundStyle(Brand.gradient)
             if phase == .codeOff {
                 Text("Code search is off").font(.system(size: 17, weight: .semibold))
-                Text("DigUp can find code by what it does, in the folders you pick. Code gets an index of its own and "
+                Text("NeuralSpotlight can find code by what it does, in the folders you pick. Code gets an index of its own and "
                      + "never shows up in other searches.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -849,18 +906,20 @@ private struct SearchHome: View {
     var body: some View {
         VStack(spacing: 0) {
             BrandMark()
-            Text("Describe it. Dig it up.")
+            Text("NEURALSPOTLIGHT")
+                .font(.system(size: 10, weight: .semibold)).tracking(2.4)
+                .foregroundStyle(Brand.blue).padding(.top, 14)
+            Text("Find the thought. Open the file.")
                 .font(.system(size: 24, weight: .bold))
                 .padding(.top, 18)
-            Text("Type what you remember in the search field above: what's in it, what it looks or sounds like, or "
-                 + "words from it.")
+            Text("Find an app by name, a document by its words, or a moment by what you remember.")
                 .font(.system(size: 13))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 440)
                 .padding(.top, 6)
-            Text("TRY")
+            Text("EXPLORE YOUR MAC")
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(.tertiary)
@@ -884,7 +943,7 @@ private struct SearchHome: View {
                 if let hotkey = model.hotkey {
                     HStack(spacing: 6) {
                         Keycaps(caps: hotkey.caps, size: 10)
-                        Text("opens DigUp from any app")
+                        Text("opens NeuralSpotlight from any app")
                     }
                 }
             }
@@ -920,10 +979,10 @@ private struct BrandMark: View {
         Image(nsImage: NSApp.applicationIconImage)
             .resizable()
             .frame(width: 84, height: 84)
-            .shadow(color: Brand.moss.opacity(0.3), radius: 14, y: 6)
+            .shadow(color: Brand.navy.opacity(0.3), radius: 14, y: 6)
             .background {
                 Circle()
-                    .fill(RadialGradient(colors: [Brand.amber.opacity(0.22), Brand.leaf.opacity(0.08), .clear],
+                    .fill(RadialGradient(colors: [Brand.cyan.opacity(0.22), Brand.indigo.opacity(0.08), .clear],
                                          center: .center, startRadius: 0, endRadius: 150))
                     .frame(width: 300, height: 300)
                     .allowsHitTesting(false)
@@ -944,13 +1003,13 @@ private struct ExampleChip: View {
             HStack(spacing: 6) {
                 Image(systemName: kind.symbol)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Brand.leaf)
+                    .foregroundStyle(Brand.indigo)
                 Text(text)
             }
             .font(.system(size: 12.5))
             .padding(.horizontal, 11)
             .padding(.vertical, 6)
-            .background(Capsule().fill(Brand.leaf.opacity(hovering ? 0.2 : 0.1)))
+            .background(Capsule().fill(Brand.indigo.opacity(hovering ? 0.2 : 0.1)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)

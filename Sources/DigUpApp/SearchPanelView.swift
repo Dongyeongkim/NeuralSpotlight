@@ -32,12 +32,15 @@ struct SearchPanelView: View {
                 .frame(width: 24)
                 .help(controller.isCode ? "Searching your code" : "")
             // With code search on, one example is code's: nothing else in the panel shows "code:".
-            SearchField(text: $controller.query, fontSize: 22,
+            SearchField(text: $controller.query, fontSize: 20,
                         placeholder: controller.model.hasCode
-                            ? "Describe it: “zebra in a video”, “code: retry with backoff”…"
-                            : "Describe it: “payment error screenshot”, “zebra in a video”…") {
+                            ? "Search apps, files, or code: what does it do?"
+                            : "Search apps, files, or something you remember…") {
                 controller.field = $0
             }
+            Image(systemName: "sparkle")
+                .foregroundStyle(Brand.blue.opacity(0.65))
+                .accessibilityLabel("NeuralSpotlight")
             if controller.phase == .words, controller.encoder == .starting {
                 ProgressView().controlSize(.small)
             }
@@ -64,7 +67,7 @@ struct SearchPanelView: View {
                     Text("Searching…").foregroundStyle(.secondary)
                 } else if !controller.model.hasFolders {
                     Text("No folders chosen yet").font(.system(size: 15, weight: .semibold))
-                    Text("DigUp only searches the folders you pick.").foregroundStyle(.secondary)
+                    Text("NeuralSpotlight only searches the folders you pick.").foregroundStyle(.secondary)
                     Button("Choose Folders…") { controller.chooseFolders() }
                         .padding(.top, 4)
                 } else if controller.isCode {
@@ -138,8 +141,9 @@ struct SearchPanelView: View {
         case .codeHint, .codeOff:
             return controller.phase == .codeOff ? "Code search is off" : "Searching your code"
         case .meaning, .empty:
-            if controller.isCode, let indexing = controller.model.status.code.indexing, indexing.total > 0 {
-                return "Still reading code (\(Int(Double(indexing.done) / Double(indexing.total) * 100))%): some isn't in yet"
+            if controller.isCode, controller.model.status.code.indexing != nil,
+               let percent = controller.model.status.code.indexingProgress.percent {
+                return "Still reading code (\(percent)%): some isn't in yet"
             }
             if !controller.isCode, let caveat = controller.model.resultsCaveat { return caveat }
             let count = controller.results.strongRows.count
@@ -180,7 +184,7 @@ private struct ResultList: View {
                                     .padding(.vertical, 3)
                             }
                             .buttonStyle(.plain)
-                            .help("Open them in the DigUp window (⌘O shows everything)")
+                            .help("Open them in the NeuralSpotlight window (⌘O shows everything)")
                         }
                     }
                     if !controller.results.weaker.isEmpty {
@@ -521,7 +525,7 @@ private struct CodeHint: View {
                 .foregroundStyle(Brand.gradient)
             if controller.phase == .codeOff {
                 Text("Code search is off").font(.system(size: 15, weight: .semibold))
-                Text("DigUp can find code by what it does, in the folders you pick. Code gets an index of its own "
+                Text("NeuralSpotlight can find code by what it does, in the folders you pick. Code gets an index of its own "
                      + "and never shows up in other searches.")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -538,7 +542,7 @@ private struct CodeHint: View {
                                 .font(.system(size: 12, design: .monospaced))
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
-                                .background(Capsule().fill(Brand.leaf.opacity(0.12)))
+                                .background(Capsule().fill(Brand.indigo.opacity(0.12)))
                         }
                         .buttonStyle(.plain)
                     }

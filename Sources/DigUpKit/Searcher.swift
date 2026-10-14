@@ -25,9 +25,8 @@ public struct SearchHit: Sendable {
 
 /// Hybrid search: meaning (EmbeddingGemma's vectors) + words (FTS5).
 ///
-/// Meaning is the model's cosine similarity, put on one scale per query (`meaning`): every vector is scored anyway, so
-/// the distribution comes for free, and only segments that stand out (`zGate`) count as meaning matches. That also
-/// gives an honest "nothing found". Words rescue what a vector can't hold exactly: codes, IDs and names.
+/// Small collections use exact scoring; larger ones use per-modality USearch HNSW with exact candidate reranking.
+/// A query-independent representative sample sets the relevance scale. Words rescue codes, IDs and names.
 public final class Searcher {
     let store: IndexStore
     private var matrix: VectorStorage?   // rows × 768 float16, row-major
@@ -37,6 +36,21 @@ public final class Searcher {
     /// False for the vectors the later pass adds (`Indexer.finishLongFiles`): scored, but they don't set the scale.
     private var rowSetsScale: [Bool] = []
     private var fileKind: [Int64: FileKind] = [:]
+    private var ann: ANNIndex?
+    private var segmentRow: [Int64: Int] = [:]
+    private var rowsByFile: [Int64: [Int]] = [:]
+    private var rowsByKind: [FileKind: [Int]] = [:]
+    private var rowsByModality: [Modality: [Int]] = [:]
+    private var calibrationRows: [Int] = []
+    private var calibrationPopulations: [Modality: Int] = [:]
+    /// Exact is also the evaluation baseline. Automatic keeps small collections on the existing exact path.
+    public enum VectorSearchMode: Sendable { case automatic, exact, approximate }
+    // Optimized 10k-vector measurements still favor exact scoring; reserve graph overhead for larger collections.
+    public static let annThreshold = 50000
+    private let vectorSearchMode: VectorSearchMode
+    public private(set) var vectorBackend = "exact"
+    /// Diagnostic only; cache failures keep search available by rebuilding or falling back to exact scoring.
+    public private(set) var annDiagnostic: String?
     public private(set) var vectorSource: String?
     /// False after `releaseVectors()` (or `loadVectors: false`): keyword search still works, and the next search with
     /// a query vector loads them again.
@@ -49,14 +63,50 @@ public final class Searcher {
 
     /// With `loadVectors: false` only keyword search is ready; vectors load on the first meaning search. The app
     /// uses that to stay small while idle: 20k vectors are ~30 MB.
-    public init(store: IndexStore, loadVectors: Bool = true) throws {
+    public init(store: IndexStore, loadVectors: Bool = true, vectorSearchMode: VectorSearchMode = .automatic) throws {
         self.store = store
+        self.vectorSearchMode = vectorSearchMode
         if loadVectors { try reload() } else { try reloadFiles() }
     }
 
     /// Reads the files and all vectors again (after indexing added some).
     public func reload() throws {
+        let previousANN = ann
         releaseVectors()
+        // One read snapshot keeps file kinds, model identity and vector rows consistent while the helper commits.
+        try store.db.execute("BEGIN DEFERRED")
+        do {
+            try readVectors()
+            try store.db.execute("COMMIT")
+        } catch {
+            try? store.db.execute("ROLLBACK")
+            throw error
+        }
+        guard let matrix, !rowFile.isEmpty,
+              vectorSearchMode == .approximate || (vectorSearchMode == .automatic && rowFile.count >= Self.annThreshold)
+        else { return }
+        let accelerator = previousANN ?? ANNIndex(directory: store.directory.appendingPathComponent(store.file.lastPathComponent + ".ann"))
+        if previousANN == nil { try? accelerator.restore() }
+        do {
+            try accelerator.synchronize(matrix: matrix, segments: rowSegment, modalities: rowModality, source: vectorSource)
+            ann = accelerator
+            let sample = MeaningScale.sample(modalities: rowModality, setsScale: rowSetsScale)
+            (calibrationRows, calibrationPopulations) = sample
+            segmentRow = Dictionary(uniqueKeysWithValues: rowSegment.enumerated().map { ($0.element, $0.offset) })
+            for row in rowFile.indices {
+                rowsByFile[rowFile[row], default: []].append(row)
+                if let kind = fileKind[rowFile[row]] { rowsByKind[kind, default: []].append(row) }
+                rowsByModality[rowModality[row], default: []].append(row)
+            }
+            self.matrix = nil // USearch owns FP16 vectors; do not retain a second complete copy while idle.
+            vectorBackend = "usearch-hnsw"
+            annDiagnostic = accelerator.loadedCache ? "cache loaded and reconciled" : "built from SQLite"
+        } catch {
+            annDiagnostic = "ANN unavailable; exact search: \(error)"
+        }
+    }
+
+    private func readVectors() throws {
         try reloadFiles()
         var rows = 0
         try store.db.query("SELECT COUNT(*) FROM segments WHERE vec IS NOT NULL") { rows = Int($0.int(0)) }
@@ -90,6 +140,15 @@ public final class Searcher {
     /// Frees the vectors' memory; keyword search keeps working.
     public func releaseVectors() {
         matrix = nil
+        ann = nil
+        segmentRow = [:]
+        rowsByFile = [:]
+        rowsByKind = [:]
+        rowsByModality = [:]
+        calibrationRows = []
+        calibrationPopulations = [:]
+        vectorBackend = "exact"
+        annDiagnostic = nil
         rowFile = []
         rowSegment = []
         rowModality = []
@@ -119,14 +178,34 @@ public final class Searcher {
         let fileKind = self.fileKind
         let allowed = { (file: Int64) -> Bool in kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
 
-        // Meaning: score every vector on this query's scale (`meaning`), keep each file's best segment.
+        // Meaning: candidate retrieval is approximate, but candidate scores and file grouping are exact.
         var best: [Int64: (z: Double, cosine: Double, row: Int)] = [:]
+        var scale: MeaningScale?
         if let query = queryVector, query.count == Vectors.dimension, !rowFile.isEmpty {
-            let scores = score(query)
-            let meaning = Self.meaning(scores, rowModality, setsScale: rowSetsScale)
-            for row in 0..<scores.count where allowed(rowFile[row]) {
-                let z = meaning[row]
-                if z > (best[rowFile[row]]?.z ?? -.infinity) { best[rowFile[row]] = (z, Double(scores[row]), row) }
+            if ann != nil {
+                let sample = try scores(query, rows: calibrationRows)
+                let calibrated = MeaningScale(scores: sample, modalities: calibrationRows.map { rowModality[$0] },
+                                               populations: calibrationPopulations)
+                scale = calibrated
+                var rows = try candidateRows(query, kinds: kinds, limit: limit)
+                let hints = Self.kindHints(text)
+                let hintedKinds = kinds.map { hints.intersection($0) } ?? hints
+                if !hintedKinds.isEmpty {
+                    // The later kind bonus may promote a result below the global cosine shortlist.
+                    rows = Array(Set(rows).union(try candidateRows(query, kinds: hintedKinds, limit: limit))).sorted()
+                }
+                let values = try scores(query, rows: rows)
+                for (row, cosine) in zip(rows, values) {
+                    let z = calibrated.score(cosine, modality: rowModality[row])
+                    if z > (best[rowFile[row]]?.z ?? -.infinity) { best[rowFile[row]] = (z, Double(cosine), row) }
+                }
+            } else {
+                let values = score(query)
+                let meaning = Self.meaning(values, rowModality, setsScale: rowSetsScale)
+                for row in values.indices where allowed(rowFile[row]) {
+                    let z = meaning[row]
+                    if z > (best[rowFile[row]]?.z ?? -.infinity) { best[rowFile[row]] = (z, Double(values[row]), row) }
+                }
             }
         }
 
@@ -168,6 +247,16 @@ public final class Searcher {
                         WHERE fts MATCH ? AND s.file IN (\(files))
                         """, [.text(pattern)]) { coverage[$0.int(0), default: 0] += 1 / Double(patterns.count) }
                 }
+            }
+        }
+
+        // Word matches outside the ANN shortlist still receive their real semantic contribution to fusion.
+        if let query = queryVector, let scale, !words.isEmpty {
+            let files = Set(words.map(\.file))
+            let rows = files.flatMap { rowsByFile[$0] ?? [] }
+            for (row, cosine) in zip(rows, try scores(query, rows: rows)) {
+                let z = scale.score(cosine, modality: rowModality[row])
+                if z > (best[rowFile[row]]?.z ?? -.infinity) { best[rowFile[row]] = (z, Double(cosine), row) }
             }
         }
 
@@ -287,6 +376,61 @@ public final class Searcher {
     public static func strongCount(_ hits: [SearchHit], ratio: Double = 0.5) -> Int {
         guard let top = hits.first?.score, top > 0 else { return hits.count }
         return hits.prefix { $0.score >= top * ratio }.count
+    }
+
+    private func candidateRows(_ query: [Float], kinds: Set<FileKind>?, limit: Int) throws -> [Int] {
+        guard let ann else { return [] }
+        let rowFile = self.rowFile, rowModality = self.rowModality, fileKind = self.fileKind, segmentRow = self.segmentRow
+        let allowed = { (row: Int) in kinds == nil || fileKind[rowFile[row]].map { kinds!.contains($0) } ?? false }
+        let filteredRows = kinds.map { selected in selected.flatMap { rowsByKind[$0] ?? [] } }
+        // A selective filter is cheaper and more reliable as an exact scan than graph traversal with many rejects.
+        if let filteredRows, filteredRows.count < 2048 { return filteredRows }
+        var rows = Set<Int>()
+        for (modality, graph) in ann.graphs {
+            let total = try graph.count
+            var count = min(total, max(256, limit * 16))
+            while count > 0 {
+                let filter: ((Int64) -> Bool)? = kinds == nil ? nil : { key in
+                    guard let row = segmentRow[key] else { return false }
+                    return rowModality[row] == modality && allowed(row)
+                }
+                let keys = try graph.search(query, count: count, includes: filter)
+                let found = keys.compactMap { segmentRow[$0] }
+                rows.formUnion(found)
+                let uniqueFiles = Set(found.map { rowFile[$0] }).count
+                if uniqueFiles >= max(limit * 2, 32) { break }
+                // One long media file may occupy the entire shortlist. Widen until enough distinct files exist;
+                // fall back to exact for this modality at the cap instead of silently returning a short result set.
+                if count >= 4096 || count == total || keys.count < count {
+                    rows.formUnion(filteredRows.map { $0.filter { rowModality[$0] == modality } } ?? rowsByModality[modality] ?? [])
+                    break
+                }
+                count = min(total, count * 2)
+            }
+        }
+        return rows.sorted()
+    }
+
+    private func scores(_ query: [Float], rows: [Int]) throws -> [Float] {
+        guard let ann, !rows.isEmpty else { return [] }
+        let scratch = UnsafeMutablePointer<Float>.allocate(capacity: VectorStorage.blockRows * Vectors.dimension)
+        defer { scratch.deallocate() }
+        var result = [Float](repeating: 0, count: rows.count)
+        var offset = 0
+        while offset < rows.count {
+            let count = min(VectorStorage.blockRows, rows.count - offset)
+            for local in 0..<count {
+                let row = rows[offset + local]
+                try ann.vector(segment: rowSegment[row], modality: rowModality[row], into: scratch + local * Vectors.dimension)
+            }
+            query.withUnsafeBufferPointer { query in
+                result.withUnsafeMutableBufferPointer { result in
+                    Vectors.scores(of: scratch, count: count, query: query.baseAddress!, into: result.baseAddress! + offset)
+                }
+            }
+            offset += count
+        }
+        return result
     }
 
     /// Cosine similarity of `query` with every stored vector (all are L2-normalized): a matrix-vector product, done a

@@ -1,17 +1,17 @@
 import AppKit
 import Sparkle
 
-/// In-app updates, with Sparkle. Once a day DigUp reads its appcast (`SUFeedURL` in Info.plist); a newer version is
+/// In-app updates, with Sparkle. Once a day NeuralSpotlight reads its appcast (`SUFeedURL` in Info.plist); a newer version is
 /// downloaded, checked against the EdDSA key in Info.plist (`SUPublicEDKey`) and Apple's signature, put in place of this
-/// copy and reopened, after one click. Finder can't replace a running app, and DigUp runs most of the time.
+/// copy and reopened, after one click. Finder can't replace a running app, and NeuralSpotlight runs most of the time.
 ///
-/// DigUp lives in the menu bar, so an update the daily check finds doesn't pop up over whatever you're doing (Sparkle's
-/// "gentle reminders"): it waits in the menu ("Update to DigUp 0.6.1…"), as a dot on the menubar mark, and in the
+/// NeuralSpotlight lives in the menu bar, so an update the daily check finds doesn't pop up over whatever you're doing (Sparkle's
+/// "gentle reminders"): it waits in the menu ("Update to NeuralSpotlight 0.6.1…"), as a dot on the menubar mark, and in the
 /// window's status bar, until you open it. Checks you ask for show Sparkle's window at once.
 final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     private let model: AppModel
     private var controller: SPUStandardUpdaterController!
-    /// Sparkle's window closed: the Dock icon goes unless one of DigUp's windows is open.
+    /// Sparkle's window closed: the Dock icon goes unless one of NeuralSpotlight's windows is open.
     var onSessionEnded: () -> Void = {}
 
     init(model: AppModel) {
@@ -23,6 +23,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
     /// Dev and test runs (their own defaults suite) don't check: Sparkle keeps its state in the app's real defaults.
     /// `-debugUpdates YES` lets one check anyway.
     func start() {
+        guard isConfigured else { return }
         let defaults = UserDefaults.standard
         guard defaults.string(forKey: "defaultsSuite") == nil || defaults.bool(forKey: "debugUpdates") else { return }
         controller.startUpdater()
@@ -30,20 +31,27 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
             + "at \(controller.updater.feedURL?.absoluteString ?? "no feed")")
     }
 
-    var automaticallyChecks: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
-        set { controller.updater.automaticallyChecksForUpdates = newValue }
+    var isConfigured: Bool {
+        guard let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String else { return false }
+        return !feed.isEmpty
     }
 
-    var canCheck: Bool { controller.updater.canCheckForUpdates }
+    var automaticallyChecks: Bool {
+        get { isConfigured && controller.updater.automaticallyChecksForUpdates }
+        set { if isConfigured { controller.updater.automaticallyChecksForUpdates = newValue } }
+    }
+
+    var canCheck: Bool { isConfigured && controller.updater.canCheckForUpdates }
 
     /// "Check for Updates…" and the waiting update's menu item: Sparkle's window, in front.
     func checkNow() {
+        guard isConfigured else { return }
         controller.checkForUpdates(nil)
     }
 
     /// A check in the background, as the daily one (for `-debugUpdateCheck`).
     func checkInBackground() {
+        guard isConfigured else { return }
         controller.updater.checkForUpdatesInBackground()
     }
 
@@ -60,7 +68,7 @@ final class Updates: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem,
                                                    state: SPUUserUpdateState) {
         if handleShowingUpdate {
-            // Sparkle's window comes up: like DigUp's own windows, with the Dock icon while it's open.
+            // Sparkle's window comes up: like NeuralSpotlight's own windows, with the Dock icon while it's open.
             NSApp.setActivationPolicy(.regular)
             bringAppToFront()
         } else {

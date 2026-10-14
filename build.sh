@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds build.noindex/DigUp.app, signed with the hardened runtime (as releases are, so dev builds behave the same).
+# Builds build.noindex/NeuralSpotlight.app, signed with the hardened runtime (as releases are, so dev builds behave the same).
 #   ./build.sh                       signed with the identity named in .sign-id (one line, gitignored), so macOS keeps
 #                                    folder permissions across rebuilds; ad-hoc without it (macOS then asks again
 #                                    after each build)
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_NAME="DigUp"
+APP_NAME="NeuralSpotlight"
 # ".noindex" keeps Spotlight (and the Apps list) from showing this staging copy.
 APP="build.noindex/$APP_NAME.app"
 
@@ -20,9 +20,6 @@ APP="build.noindex/$APP_NAME.app"
 if [[ -z "${DEVELOPER_DIR:-}" && -d /Applications/Xcode.app ]]; then
   export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
-
-# llama.cpp, the embedding runtime, linked into the helper (only rebuilt when its tag or patch changes).
-scripts/build-llama.sh
 
 # Both executables: the app, and the `digup` CLI, which the app runs as its indexing helper and query encoder.
 swift build -c release --product DigUpApp
@@ -40,11 +37,12 @@ cp "$BIN_DIR/DigUpApp" "$APP/Contents/MacOS/$APP_NAME"
 # The indexing helper lives in Helpers/: next to DigUp in MacOS/ it would collide on a case-insensitive disk.
 cp "$BIN_DIR/digup" "$APP/Contents/Helpers/digup"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
-xcrun actool --compile "$APP/Contents/Resources" --platform macosx --target-device mac --minimum-deployment-target 14.0 \
+xcrun actool --compile "$APP/Contents/Resources" --platform macosx --target-device mac --minimum-deployment-target 15.0 \
   --app-icon AppIcon --output-partial-info-plist "$(mktemp -d)/AppIcon.plist" --enable-on-demand-resources NO \
   --development-region en "$PWD/Resources/AppIcon/AppIcon.icon" > /dev/null
 cp "$ICON" "$APP/Contents/Resources/AppIcon.icns"   # over actool's plainer fallback: ours has simplified 16 and 32 px
 cp Resources/Acknowledgements.txt "$APP/Contents/Resources/Acknowledgements.txt"
+cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 cp Resources/AppIcon/tray.png Resources/AppIcon/tray-dim.png Resources/AppIcon/tray-paused.png "$APP/Contents/Resources/"   # the menubar's logo
 
 # Sparkle (in-app updates): the framework in Frameworks/, where the app's runpath looks. Its XPC services are for
@@ -62,8 +60,7 @@ PLIST="$APP/Contents/Info.plist"
 [[ -n "${SPARKLE_KEY:-}" ]] && { /usr/libexec/PlistBuddy -c "Delete :SUPublicEDKey" "$PLIST" 2>/dev/null || true
                                  /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $SPARKLE_KEY" "$PLIST"; }
 
-# Nested code first, then the bundle. The helper needs no entitlements: llama.cpp compiles its Metal shaders at run
-# time through Metal's own compiler service, which the hardened runtime allows (checked 2026-10-08). The app's one
+# Nested code first, then the bundle. The Core ML helper needs no extra entitlements. The app's one
 # entitlement lets it ask QuickTime Player to open a recording at a moment.
 IDENTITY="${SIGN_ID:-$( [[ -f .sign-id ]] && head -1 .sign-id || echo - )}"
 TIMESTAMP=$([[ "${RELEASE:-}" == 1 ]] && echo --timestamp || echo --timestamp=none)

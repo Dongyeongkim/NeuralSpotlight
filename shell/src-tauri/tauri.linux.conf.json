@@ -6,9 +6,7 @@
           "libcurl4t64 | libcurl4",
           "libgomp1"
         ],
-        "recommends": [
-          "libvulkan1"
-        ]
+        "recommends": []
       }
     }
   }

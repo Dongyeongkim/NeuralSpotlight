@@ -5,6 +5,8 @@ public enum FileKind: String, CaseIterable, Sendable, Codable {
     case screenshot, image, pdf, doc, audio, video
     /// Source code, a repo's docs and notebooks: only in the code index (`IndexOptions.code`).
     case code
+    /// Metadata-only launcher results; never queued for content extraction or embedding.
+    case file, folder, application
 
     /// The order of the first indexing pass: what people look for most comes first.
     static let indexingOrderSQL = """
@@ -38,6 +40,8 @@ public struct IndexOptions: Sendable {
     /// This index is the code index: the code folders' source files, their repos' docs and their notebooks, read as
     /// stretches of whole lines (`CodeExtractor`), and nothing else (`Rules.classifyCode`).
     public var code = false
+    /// Native app policy: use embeddings for media, PDFs and code; ordinary documents stay in Spotlight.
+    public var richContentOnly = false
     /// Characters a stretch of code holds at most (whole lines; a longer line is a stretch of its own). On the real-code
     /// eval (2026-10-09) 1,200 and 3,600 both lost to it: shorter cut functions apart, longer blurred them together.
     public var codeStretch = 1800
@@ -63,7 +67,7 @@ public struct IndexOptions: Sendable {
     public var pageBudget = 280
     public var frameBudget = 70
     public var frameInterval = 3.0         // seconds between sampled video frames (near-duplicates are dropped)
-    public var audioWindow = 30.0          // the model silently ignores audio past 30 s of one input
+    public var audioWindow = 30.0          // Core ML covers each window in 10 s pieces and pools every piece
     public var audioHop = 25.0
     public var excludedFolders: [String] = []
     public var excludedExtensions: Set<String> = []
@@ -82,6 +86,15 @@ public struct IndexOptions: Sendable {
         // number, and every code index is read again.
         if code { return "code1 lines\(codeStretch)" }
         return "photo\(photoBudget) shot\(screenshotBudget) page\(pageBudget) frame\(frameBudget)/\(frameInterval)s audio\(audioWindow)/\(audioHop)s"
+    }
+}
+
+public enum SemanticPolicy {
+    public static func embeds(_ kind: FileKind) -> Bool {
+        switch kind {
+        case .screenshot, .image, .pdf, .audio, .video, .code: true
+        case .doc, .file, .folder, .application: false
+        }
     }
 }
 

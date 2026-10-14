@@ -11,8 +11,8 @@ import WinSDK
 /// screenshots, and stayed there), and all of it goes back to the system when this process exits.
 ///
 /// Protocol: one command per line on stdin, one JSON event per line on stdout.
-///   stdin:  sync | sync code | stop | backfill on | backfill off      (EOF = stop)
-///   stdout: {"event": "missing" | "pruned" | "sync" | "file" | "rest" | "summary" | "waiting" | "idle" | "error" |
+///   stdin:  sync | sync code | activity | stop | backfill on | backfill off      (EOF = stop)
+///   stdout: {"event": "missing" | "pruned" | "sync" | "indexing" | "file" | "rest" | "summary" | "waiting" | "idle" | "error" |
 ///            "exit", ...}; events about the code index say "code": true
 ///
 /// The loop: sync, index what the sync just queued (if it's a few files: new files go first, on any power source),
@@ -21,6 +21,8 @@ import WinSDK
 /// files (`Indexer.finishLongFiles`) under the same rules. Between batches it yields to stop and to "backfill off" at
 /// once, and to a new sync once indexing has had about as long as the last sync took (`yieldAt`). When it's done it
 /// keeps a warm worker for `linger` seconds (screenshots come in bursts), then exits.
+/// With --recent-first, engaged files in both indexes precede bulk work in bounded batches. All embedding,
+/// including newly discovered and recently used files, obeys the app's backfill power/time permission.
 ///
 /// Before the model has downloaded it only syncs (file names are searchable at once), says it's "waiting", and exits.
 /// Folders that aren't there (an unplugged drive) or can't be read are skipped, and what was indexed from them stays.
@@ -48,6 +50,9 @@ final class IndexService: @unchecked Sendable {
     private let modelReady: () -> Bool
     private let newFilesLimit: Int
     private let linger: Double
+    private let recentFirst: Bool
+    private var activityRequested = false // under lock; checked between embedding batches
+    private var modelChecked = false
 
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
@@ -61,7 +66,7 @@ final class IndexService: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
-         backfill: Bool, newFilesLimit: Int, linger: Double) {
+         backfill: Bool, recentFirst: Bool = false, newFilesLimit: Int, linger: Double) {
         self.main = main
         self.code = code
         self.folder = folder
@@ -70,6 +75,7 @@ final class IndexService: @unchecked Sendable {
         self.backfillAllowed = backfill
         self.newFilesLimit = newFilesLimit
         self.linger = linger
+        self.recentFirst = recentFirst
     }
 
     private var parts: [Part] { [main] + (code.map { [$0] } ?? []) }
@@ -87,7 +93,6 @@ final class IndexService: @unchecked Sendable {
             let again = try main.store.readAgainOnce()   // what older indexes couldn't read: scans' words, SVGs
             if again > 0 { emit(["event": "rescan", "files": again]) }
             for part in parts {
-                try part.indexer.checkModel()   // a new model: everything is queued again
                 if let keepOnly = part.keepOnly {
                     let pruned = try part.store.prune(keepingUnder: keepOnly.map(\.path))
                     if pruned > 0 { emit(["event": "pruned", "files": pruned, "code": part.code]) }
@@ -102,12 +107,13 @@ final class IndexService: @unchecked Sendable {
         var newFiles = Set<Int64>(), newCode = Set<Int64>()
         var codeCounted = code == nil
         while true {
+            lock.withLock { activityRequested = false }
             if lock.withLock({ () -> Bool in defer { syncRequested = false }; return syncRequested }) {
                 sync(main, into: &newFiles)
             }
             // The code folders are crawled with the first sync, so their counts show from the start (a big first pass
             // of the main index takes hours); their files are read once the main index has nothing waiting, below.
-            if !codeCounted, let code {
+            if let code, !codeCounted || recentFirst {
                 codeCounted = true
                 if lock.withLock({ () -> Bool in defer { codeSyncRequested = false }; return codeSyncRequested }) {
                     sync(code, into: &newCode)
@@ -119,6 +125,38 @@ final class IndexService: @unchecked Sendable {
                 emitCounts("waiting", ["for": "model"])
                 break
             }
+            // A replacement model must be present and verified before old semantic vectors are discarded. Also
+            // respect the same power gate as embedding: validating several large model files is real work.
+            if !modelChecked, lock.withLock({ backfillAllowed })
+                || !recentFirst && (!newFiles.isEmpty || !newCode.isEmpty) {
+                do {
+                    for part in parts { try part.indexer.checkModel() }
+                    modelChecked = true
+                } catch {
+                    emit(["event": "error", "message": "\(error)", "fatal": true])
+                    finish()
+                    return 1
+                }
+            }
+            // Read engaged files before bulk work, across both indexes. Recency changes priority, never power
+            // permission: background work and engaged work both wait when the app's power policy holds them.
+            if recentFirst, lock.withLock({ backfillAllowed }) {
+                var didRecent = false
+                for part in parts {
+                    let recent = (try? part.store.recentFiles()) ?? []
+                    let pending = Set(recent.filter { $0.state == "pending" }.map(\.id))
+                    let partial = Set(recent.filter { $0.state == "partial" }.map(\.id))
+                    if !pending.isEmpty {
+                        guard run(part, only: pending) else { finish(); return 1 }
+                        didRecent = true
+                    }
+                    if !partial.isEmpty, !part.code {
+                        guard finishLongFiles(only: partial) else { finish(); return 1 }
+                        didRecent = true
+                    }
+                }
+                if didRecent { continue }
+            }
             if !newFiles.isEmpty {
                 guard run(main, only: newFiles) else { break }
                 newFiles = left(main, of: newFiles)
@@ -126,6 +164,7 @@ final class IndexService: @unchecked Sendable {
             }
             if (try? main.store.pendingCount()) ?? 0 > 0, lock.withLock({ backfillAllowed }) {
                 guard run(main, only: nil) else { break }
+                if recentFirst { continue } // bounded bulk batch, then re-check engagement
                 if lock.withLock({ syncRequested }) { continue }
             }
             // The code index once the main one has nothing waiting: its own sync (code changes come in a while after
@@ -141,6 +180,7 @@ final class IndexService: @unchecked Sendable {
                 }
                 if (try? code.store.pendingCount()) ?? 0 > 0, lock.withLock({ backfillAllowed }) {
                     guard run(code, only: nil) else { break }
+                    if recentFirst { continue }
                     if lock.withLock({ syncRequested || codeSyncRequested }) { continue }
                 }
             }
@@ -216,7 +256,8 @@ final class IndexService: @unchecked Sendable {
         }
         do {
             let summary = try part.indexer.sync(availableRoots(part))
-            if summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
+            if !recentFirst, summary.queued.count <= newFilesLimit { newFiles.formUnion(summary.queued) }
+            try part.store.expireActivity()
             emitCounts("sync", [
                 "code": part.code,
                 "new": newFiles.count,   // about to be indexed, whatever the power source
@@ -236,20 +277,23 @@ final class IndexService: @unchecked Sendable {
         let started = Date()
         let isNew = ids != nil
         do {
-            let states = try part.indexer.run(only: ids, shouldStop: { [self] in
+            // A recent-first run is at most eight files, not the whole collection. Keep batch counters separate
+            // from authoritative collection counts, including while the first file/model is still loading.
+            emitCounts("indexing", ["code": part.code])
+            let states = try part.indexer.run(limit: recentFirst ? 8 : nil, only: ids, shouldStop: { [self] in
                 lock.withLock {
-                    stopRequested || (!isNew && !backfillAllowed)
+                    stopRequested || ((!isNew || recentFirst) && !backfillAllowed)
+                        || (recentFirst && activityRequested)
                         || Date() >= yieldAt && (syncRequested || part.code && codeSyncRequested)
                 }
             }, onEvent: { event in
-                emit(["event": "file", "new": isNew, "done": event.done, "total": event.total, "path": event.path,
+                emitCounts("file", ["new": isNew, "done": event.done, "total": event.total, "path": event.path,
                       "kind": event.kind.rawValue, "state": event.state, "seconds": event.seconds,
                       "note": event.note ?? "", "code": part.code])
             })
-            if !states.isEmpty {
-                emit(["event": "summary", "new": isNew, "states": states, "code": part.code,
-                      "ms": Int(Date().timeIntervalSince(started) * 1000)])
-            }
+            // Even an interrupted/empty batch must clear its active progress and refresh both indexes' counts.
+            emitCounts("summary", ["new": isNew, "states": states, "code": part.code,
+                                    "ms": Int(Date().timeIntervalSince(started) * 1000)])
             return true
         } catch {
             emit(["event": "error", "message": "\(error)", "fatal": true, "code": part.code])
@@ -259,22 +303,21 @@ final class IndexService: @unchecked Sendable {
 
     /// The rest of long files (`Indexer.finishLongFiles`), yielding as the backfill does. False when indexing has to
     /// stop.
-    private func finishLongFiles() -> Bool {
+    private func finishLongFiles(only ids: Set<Int64>? = nil) -> Bool {
         let started = Date()
         do {
-            let states = try main.indexer.finishLongFiles(shouldStop: { [self] in
+            let states = try main.indexer.finishLongFiles(only: ids, shouldStop: { [self] in
                 lock.withLock {
                     stopRequested || !backfillAllowed
+                        || (recentFirst && activityRequested)
                         || Date() >= yieldAt && (syncRequested || codeSyncRequested && code != nil)
                 }
             }, onStep: { step in
-                emit(["event": "rest", "done": step.done, "total": step.total, "files": step.files, "path": step.path,
+                emitCounts("rest", ["done": step.done, "total": step.total, "long_files": step.files, "path": step.path,
                       "kind": step.kind.rawValue, "state": step.state, "seconds": step.seconds, "note": step.note ?? ""])
             })
-            if !states.isEmpty {
-                emit(["event": "summary", "rest": true, "states": states,
-                      "ms": Int(Date().timeIntervalSince(started) * 1000)])
-            }
+            emitCounts("summary", ["rest": true, "states": states,
+                                    "ms": Int(Date().timeIntervalSince(started) * 1000)])
             return true
         } catch {
             emit(["event": "error", "message": "\(error)", "fatal": true])
@@ -286,11 +329,12 @@ final class IndexService: @unchecked Sendable {
     private func waitForWork() -> Bool {
         let deadline = DispatchTime.now() + linger
         while wake.wait(timeout: deadline) == .success {
-            let (sync, codeSync, stop, backfill) = lock.withLock {
-                (syncRequested, codeSyncRequested, stopRequested, backfillAllowed)
+            let (sync, codeSync, stop, backfill, activity) = lock.withLock {
+                (syncRequested, codeSyncRequested, stopRequested, backfillAllowed, activityRequested)
             }
             if stop { return false }
             if sync || codeSync && code != nil { return true }
+            if activity { return true }
             if backfill, parts.contains(where: { (try? $0.store.pendingCount()) ?? 0 > 0 })
                 || (try? main.store.unfinishedCount().files) ?? 0 > 0 {
                 return true
@@ -305,6 +349,11 @@ final class IndexService: @unchecked Sendable {
                 switch line.trimmingCharacters(in: .whitespaces) {
                 case "sync": syncRequested = true
                 case "sync code": codeSyncRequested = true
+                case "activity":
+                    activityRequested = true
+                    // A used file may not have reached the crawl yet (e.g. an editor just saved it).
+                    syncRequested = true
+                    codeSyncRequested = code != nil
                 case "stop": stopRequested = true
                 case "backfill on": backfillAllowed = true
                 case "backfill off": backfillAllowed = false
@@ -324,17 +373,21 @@ final class IndexService: @unchecked Sendable {
         for part in parts {
             guard let counts = try? part.store.counts() else { continue }
             let prefix = part.code ? "code_" : ""
-            var files = 0, searchable = 0, pending = 0
+            var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
             for states in counts.byKindAndState.values {
                 for (state, count) in states {
                     files += count
                     if state == "done" || state == "partial" { searchable += count }
                     if state == "pending" { pending += count }
+                    if state == "failed" { failed += count }
+                    if state == "skipped" { skipped += count }
                 }
             }
             fields[prefix + "files"] = files
             fields[prefix + "searchable"] = searchable
             fields[prefix + "pending"] = pending
+            fields[prefix + "failed"] = failed
+            fields[prefix + "skipped"] = skipped
             fields[prefix + "vectors"] = counts.vectors
             if !part.code { fields["unfinished"] = counts.unfinished }   // long files with pages or chunks left to read
         }

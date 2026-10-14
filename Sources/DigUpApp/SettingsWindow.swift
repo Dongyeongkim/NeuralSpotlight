@@ -223,7 +223,7 @@ private struct GeneralSettings: View {
                     state.launchAtLogin = state.app.launchesAtLogin
                 })) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Open DigUp when you log in")
+                        Text("Open NeuralSpotlight when you log in")
                         Text(state.loginProblem ?? "So the shortcut always works.")
                             .font(.system(size: 11))
                             .foregroundStyle(state.loginProblem == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.red))
@@ -231,24 +231,29 @@ private struct GeneralSettings: View {
                 }
             }
             Section {
-                Toggle(isOn: Binding(get: { state.checksForUpdates }, set: { on in
-                    state.app.updates.automaticallyChecks = on
-                    state.checksForUpdates = on
-                })) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Check for updates automatically")
-                        Text("Once a day DigUp asks GitHub for its newest version; nothing about your files is sent. "
-                             + "Updates install with one click.")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                if state.app.updates.isConfigured {
+                    Toggle(isOn: Binding(get: { state.checksForUpdates }, set: { on in
+                        state.app.updates.automaticallyChecks = on
+                        state.checksForUpdates = on
+                    })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Check for updates automatically")
+                            Text("Once a day NeuralSpotlight asks GitHub for its newest version; nothing about your files is sent. "
+                                 + "Updates install with one click.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
+                } else {
+                    Text("Local build · Updates are installed manually.")
+                        .foregroundStyle(.secondary)
                 }
                 LabeledContent {
-                    Button("Check Now") { state.app.updates.checkNow() }
+                    Button("Check Now") { state.app.updates.checkNow() }.disabled(!state.app.updates.canCheck)
                 } label: {
-                    Text(state.model.updateAvailable.map { "DigUp \($0) is available" }
-                         ?? "DigUp \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
+                    Text(state.model.updateAvailable.map { "NeuralSpotlight \($0) is available" }
+                         ?? "NeuralSpotlight \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
                 }
             }
         }
@@ -269,7 +274,7 @@ private struct FolderSettings: View {
             Section {
                 if let summaries = state.summaries {
                     if summaries.isEmpty {
-                        Text("No folders yet. Add the ones DigUp should search.")
+                        Text("No folders yet. Add the ones NeuralSpotlight should search.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(summaries) { summary in
@@ -330,7 +335,7 @@ private struct FolderSettings: View {
             } header: {
                 Text("Skip these file types")
             } footer: {
-                Text("DigUp only reads pictures, PDFs, documents (txt, md, rtf, docx, odt, html), audio and video here; "
+                Text("NeuralSpotlight only reads pictures, PDFs, documents (txt, md, rtf, docx, odt, html), audio and video here; "
                      + "code is read only in the code folders (the Code tab). Keys, certificates and password files are "
                      + "never read, nor are hidden folders like ~/.ssh.")
                     .font(.system(size: 11))
@@ -448,11 +453,13 @@ private struct IndexProgress: View {
         }
     }
 
-    /// "357 of 365 files searchable · 8 waiting · 2 long files to finish"
+    /// Meaning-index coverage; Spotlight file and app search is available independently.
     private var detail: String {
         let status = model.status
-        var text = "\(status.searchable.formatted()) of \(status.files.formatted()) files searchable"
+        var text = "\(status.searchable.formatted()) of \(status.files.formatted()) files ready for meaning search"
         if status.pending > 0 { text += " · \(status.pending.formatted()) waiting" }
+        if status.failed > 0 { text += " · \(status.failed.formatted()) couldn't be indexed" }
+        if status.skipped > 0 { text += " · \(status.skipped.formatted()) skipped" }
         if status.unfinished > 0 {
             text += " · \(status.unfinished.formatted()) long \(status.unfinished == 1 ? "file" : "files") to finish"
         }
@@ -532,7 +539,10 @@ private struct StorageSettings: View {
         Form {
             Section {
                 LabeledContent("EmbeddingGemma 2") {
-                    Text("Google · Apache 2.0 · 865 MB")
+                    Text("Google · Apache 2.0 · \(bytes(state.model.download.total))")
+                }
+                LabeledContent("Processing") {
+                    Text("Core ML · automatic acceleration")
                 }
                 LabeledContent("Status") {
                     HStack(spacing: 8) {
@@ -555,18 +565,18 @@ private struct StorageSettings: View {
             } footer: {
                 if !state.model.download.isReady {
                     HStack(alignment: .firstTextBaseline) {
-                        Text("If your network blocks Hugging Face, download the two files on another network and "
-                             + "click Use Files… to choose them. DigUp checks them before it uses them.")
+                        Text("If your network blocks Hugging Face, download the model files on another network and "
+                             + "click Use Files… to choose them. NeuralSpotlight checks them before it uses them.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("Copy Links") {
                             NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(ModelDownload.links, forType: .string)
+                            NSPasteboard.general.setString(state.model.download.links, forType: .string)
                         }
                         .controlSize(.small)
-                        .help("Copies the addresses of the two files")
+                        .help("Copies the model download addresses")
                     }
                 }
             }
@@ -580,15 +590,15 @@ private struct StorageSettings: View {
                 }
             }
             Section("Privacy") {
-                Text("DigUp reads the folders you choose and keeps what it learns in its index, on this Mac. "
-                     + "It goes online only to download its model, once, and to check for updates (General), "
-                     + "which sends nothing about your files.")
+                Text("NeuralSpotlight reads the folders you choose and keeps what it learns in its index, on this Mac. "
+                     + "It downloads its models once. Search and indexing run locally, "
+                     + "without uploading your files.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Section {
-                Text("DigUp \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · "
-                     + "EmbeddingGemma 2 by Google (Apache 2.0), run by llama.cpp (MIT).")
+                Text("NeuralSpotlight \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · "
+                     + "EmbeddingGemma 2 by Google (Apache 2.0), running with Core ML.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
@@ -620,8 +630,9 @@ private struct CodeSettings: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 5) {
                             Text(state.model.codeStatusLine).font(.system(size: 12, weight: .medium))
-                            if let indexing = state.model.status.code.indexing, indexing.total > 0 {
-                                ProgressView(value: Double(indexing.done) / Double(indexing.total)).controlSize(.small)
+                            if state.model.status.code.indexing != nil,
+                               let progress = state.model.status.code.indexingProgress.fraction {
+                                ProgressView(value: progress).controlSize(.small)
                             }
                         }
                         Spacer()

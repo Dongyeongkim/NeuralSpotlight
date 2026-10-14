@@ -29,6 +29,8 @@ public struct MeasuredCosts: Codable, Sendable, Equatable {
         public var device: String?
         public var checks: Int?
         public var doubtful: Bool?
+        /// Device and timing measurements apply to this encoder pipeline, not a later backend switch.
+        public var vectorSource: String?
 
         public init(embedding: Double, ocr: Double, kinds: [String: Double]? = nil, device: String? = nil) {
             self.embedding = embedding
