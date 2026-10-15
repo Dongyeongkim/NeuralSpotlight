@@ -1,62 +1,62 @@
-# 파일과 앱 검색 및 저전력 인덱싱 설계
+# File and Application Search and Low-Power Indexing Design
 
-2026년 10월 15일 기준. Spotlight 이름·텍스트 검색과 앱 실행을 기본 경로로 쓰고, 최근 탐험한 미디어·PDF·코드를 우선 임베딩한다. 텍스트·이미지·음성을 모두 Core ML로 연결하고 USearch ANN을 적용했다. 아래 이전 텍스트 실험과 현재 전체 모달리티 구현의 검증 범위를 구분한다. 작업당 에너지 측정은 후속 과제다.
+As of October 15, 2026. Spotlight name/text search and application launching form the default search path. Recently explored media, PDFs, and code receive priority for embedding. Text, image, and audio inference now use Core ML, with USearch providing ANN search. The earlier text-only experiments and validation of the current multimodal implementation are distinguished below. Measuring energy per operation remains future work.
 
-## 이번에 구현한 검색
+## Search Implemented in This Update
 
-- macOS 앱의 검색 패널과 검색 창에 파일, 폴더, 애플리케이션 결과를 통합했다. Enter로 기본 앱에서 파일을 열거나 애플리케이션을 실행하고, 기존 Finder 표시 기능도 사용한다.
-- 파일 이름과 시스템이 추출한 텍스트는 선택한 검색 폴더 범위에서 Spotlight의 기존 인덱스를 조회한다. ZIP, 스프레드시트 등 내용 추출기가 없는 형식도 이름으로 찾는다. 제외 폴더·확장자 설정을 적용하며, 숨김 파일, 키 파일, 앱 내부 파일, 일부 의존성 폴더와 다운로드되지 않은 클라우드 파일은 제외한다.
-- 앱 목록은 `/Applications`, `/System/Applications`, `~/Applications`에서 수집한다. 앱 번들 안으로 내려가지 않으며, 선택한 파일 폴더나 임베딩 모델이 없어도 검색할 수 있다. 목록은 검색할 때 최대 60초 간격으로 갱신하고, 삭제된 앱은 결과에서 즉시 제외한다.
-- 이름의 완전 일치, 접두사, 부분 문자열, 모든 검색어 포함 순으로 점수를 부여한다. 한 글자 앱 이름과 한국어를 지원한다. 내용 검색과 같은 경로가 나오면 한 결과로 합치고 PDF 페이지·영상 시점·발췌문을 보존한다.
-- `code:`는 기존의 별도 코드 검색을 유지한다. 이번 통합은 네이티브 macOS 앱에 적용했으며 CLI와 Tauri 검색 UI에는 연결하지 않았다.
+- File, folder, and application results are integrated into the macOS app's search panel and search window. Enter opens a file in its default app or launches an application. The existing Show in Finder action remains available.
+- File names and system-extracted text are queried through Spotlight's existing index within the selected search folders. Formats without a content extractor, such as ZIP archives and spreadsheets, can also be found by name. Folder and extension exclusions apply. Hidden files, key files, files inside application bundles, some dependency directories, and cloud files that have not been downloaded are excluded.
+- The application catalog is collected from `/Applications`, `/System/Applications`, and `~/Applications`. Collection does not descend into app bundles, and applications remain searchable without selected file folders or an embedding model. The catalog refreshes on search at most once every 60 seconds; deleted applications are immediately excluded from results.
+- Names are scored by exact match, prefix, substring, and inclusion of all query terms, in that order. Single-character application names and Korean are supported. When a content result has the same path, the two are merged into one result while preserving PDF pages, video timestamps, and excerpts.
+- `code:` retains the existing separate code search. This integration applies to the native macOS app; it is not connected to the CLI or Tauri search UI.
 
-파일 목록은 Spotlight에 의존하므로 인덱싱이 꺼진 디스크, Spotlight 개인정보 보호 제외 위치, 아직 시스템이 수집하지 않은 파일은 이름 검색에서 누락될 수 있다. 기존 내용 인덱스에 있는 파일은 계속 검색된다. 한 조회에서 가져오는 메타데이터 후보 수를 제한하므로 매우 광범위한 검색에서는 전체 파일이 표시되지는 않는다. 파일명·텍스트 검색은 경로 문자열 전체나 오타 교정까지 지원하지 않는다.
+File discovery depends on Spotlight, so name search may omit disks with indexing disabled, locations excluded by Spotlight privacy settings, and files the system has not yet collected. Files in the existing content index remain searchable. The number of metadata candidates retrieved per query is bounded, so very broad searches do not display every file. Name/text search does not support matching entire path strings or typo correction.
 
-구현 위치는 `Sources/DigUpKit/LocalSearch.swift`, `Platform/Apple/LocalSearch+Apple.swift`, `Sources/DigUpApp/Engine.swift`와 결과 UI다. 메타데이터 결과에는 벡터를 만들지 않으며 기존 SQLite 인덱스를 재생성할 필요가 없다.
+The implementation is in `Sources/DigUpKit/LocalSearch.swift`, `Platform/Apple/LocalSearch+Apple.swift`, `Sources/DigUpApp/Engine.swift`, and the result UI. Metadata results do not receive vectors, and the existing SQLite index does not need to be rebuilt.
 
-## 기존 코드에서 확인한 인덱싱 구조
+## Indexing Architecture Found in the Existing Code
 
-| 영역 | 현재 동작 | 다음 개선 이유 |
+| Area | Current behavior | Reason for the next improvement |
 |---|---|---|
-| 수집 | `Crawler`가 선택한 폴더를 순회하고 지원 형식만 선택 | 이름 검색 대상과 내용 분석 대상을 분리해야 일반 파일도 찾을 수 있음 |
-| 변경 감지 | FSEvents를 받고 일반 파일은 0.75초, 코드는 기본 60초 동안 변화가 가라앉기를 기다림 | 현재 이벤트의 경로를 helper에 전달하지 않고 전체 선택 폴더를 다시 순회함 |
-| 변경 판정 | 크기·수정 시간 비교, 같은 device/inode의 이동은 벡터 재사용 | 내용이 같은 재저장·복사에도 재임베딩이 발생할 수 있음 |
-| 최초 처리 | 최근 30일 사용한 미완료 파일 → 나머지 종류·수정 순서 | 메인·코드 인덱스 모두 최근 파일을 먼저 처리 |
-| 긴 파일 | PDF·문서는 첫 구간을 먼저 처리하고 나머지는 뒤에서 처리 | 오디오·영상에도 처리량과 메모리 사용량을 제한하는 재개 지점이 필요 |
-| 전력 정책 | 네이티브 앱은 최근·신규 파일에도 기존 백필 전원·발열·시간대 정책 적용 | 작업량·에너지 상한과 유휴 감지는 후속 과제 |
-| 검색 | SQLite FTS5 + USearch HNSW, 작은 집합은 exact | 미디어 구간 규모별 지연·정확도·에너지 측정 지속 |
-| 질의 추론 | 이름·텍스트 결과를 먼저 표시하고 입력이 120ms 멈춘 뒤 추론 예약 | 이름 결과만으로 충분할 때 추론 생략을 추가 평가 |
+| Discovery | `Crawler` walks selected folders and selects supported formats | Name-search candidates must be separated from content-analysis candidates to find ordinary files as well |
+| Change detection | Receives FSEvents and waits for changes to settle: 0.75 seconds for ordinary files, 60 seconds by default for code | Event paths are not currently passed to the helper; all selected folders are walked again |
+| Change classification | Compares size and modification time; moves with the same device/inode reuse vectors | Saving or copying identical content can still trigger re-embedding |
+| Initial processing | Unfinished files used within the last 30 days, then the remaining files by kind and modification order | Recent files receive priority in both the main and code indexes |
+| Long files | Processes the first section of a PDF/document before handling the remainder later | Audio and video also need resumable checkpoints that bound work and memory usage |
+| Power policy | The native app applies existing backfill power, thermal, and time-window policies to recent and new files too | Work/energy budgets and idle detection remain future work |
+| Search | SQLite FTS5 + USearch HNSW, with exact search for small collections | Continue measuring latency, accuracy, and energy at different media-segment counts |
+| Query inference | Shows name/text results first and schedules inference after typing pauses for 120 ms | Further evaluate skipping inference when name results are sufficient |
 
-기존 120ms는 결과 표시만 늦췄지만 이번 변경은 `embedAhead` 호출 자체를 기다리도록 바꿨다. 새 입력은 대기 중인 이전 검색을 취소한다. 이미 실행 중인 모델 호출의 강제 중단은 지원하지 않는다. 질의 encoder는 텍스트 자산이 준비되면 앱 시작 시 백그라운드에서 준비한다. 유휴 종료 후 패널을 열면 다시 준비하며, 이름·Spotlight 결과는 이 준비를 기다리지 않는다.
+Previously, the 120 ms delay only postponed result display. This change delays the `embedAhead` call itself. New input cancels a previous search that is still waiting. A model call already in progress cannot be forcibly interrupted. Once text assets are available, the query encoder prepares in the background at app startup. Opening the panel after an idle shutdown prepares it again; name and Spotlight results do not wait for this preparation.
 
-## Core ML과 ANE — 전체 모달리티 구현
+## Core ML and ANE — Full Multimodal Implementation
 
-`CoreMLRuntime`의 `CoreMLEmbedder`가 텍스트·이미지·음성을 같은 `Embedder` 인터페이스와 vector source로 제공한다. `CoreMLTextEmbedder`가 공유 text transformer를 실행하고 `CoreMLMediaEmbedder`가 vision/audio encoder의 결과를 그 transformer에 전달한다. 영상은 기존 프레임·오디오 추출을 유지한다. 네이티브 지원 범위는 Apple silicon과 macOS 15 이상이다. llama.cpp·GGUF 런타임과 다운로드·빌드 의존은 제거했다.
+`CoreMLEmbedder` in `CoreMLRuntime` provides text, image, and audio embeddings through the same `Embedder` interface and vector source. `CoreMLTextEmbedder` runs the shared text transformer, and `CoreMLMediaEmbedder` passes vision/audio encoder outputs to that transformer. Video retains the existing frame and audio extraction. Native support requires Apple silicon and macOS 15 or later. The llama.cpp/GGUF runtime and its download/build dependencies have been removed.
 
-[FluidInference의 모델](https://huggingface.co/FluidInference/embeddinggemma-2-coreml)을 revision `3f978ddf92cac9aa07eb2dcf6eb36cf450f3dba4`로 고정했다. 12개 자산은 총 **1,481,900,463바이트**다.
+[FluidInference's models](https://huggingface.co/FluidInference/embeddinggemma-2-coreml) are pinned to revision `3f978ddf92cac9aa07eb2dcf6eb36cf450f3dba4`. The 12 assets total **1,481,900,463 bytes**.
 
-| 자산 | 크기 |
+| Assets | Size |
 |---|---:|
-| 텍스트 모델·토크나이저·토큰 테이블 | 584,745,430바이트 |
-| Vision 모델 | 309,277,919바이트 |
-| Audio 모델 | 587,877,114바이트 |
+| Text model, tokenizer, and token table | 584,745,430 bytes |
+| Vision model | 309,277,919 bytes |
+| Audio model | 587,877,114 bytes |
 
-다운로드는 중단 후 재개하고 크기·SHA-256 확인 후 최종 경로에 게시한다. BF16 토큰 테이블은 디스크 형식이며 실제 Core ML 입력은 FP16이다. 컴파일·장치 캐시는 다운로드 크기 외의 저장 공간을 사용한다.
+Downloads resume after interruption and are published to their final paths after size and SHA-256 verification. BF16 is the token table's on-disk format; actual Core ML inputs are FP16. Compilation and device caches consume storage beyond the download size.
 
-- 모든 모델은 `MLComputeUnits.all`을 사용한다. ANE·GPU·CPU를 모두 허용하되 연산별 배치와 실행 순서는 Core ML이 결정한다. 공개 API로 **ANE → GPU → CPU의 우선순위를 강제할 수 없다**. [Apple compute units](https://developer.apple.com/documentation/coreml/mlcomputeunits/all)
-- 일반 검색·코드·문서 프롬프트는 기존 `Prompts`를 유지한다. query worker는 일반 질의에 128토큰 함수, 그보다 긴 질의에 512토큰 함수를 사용한다. 질의 상한은 BOS/EOS 포함 512토큰이다. 인덱싱은 32/48/64/128/256/512 중 적절한 함수를 사용한다.
-- 긴 문서·코드 구간은 본문 토큰을 빠짐없이 여러 창으로 나누고 제목 프롬프트를 반복한다. 창별 벡터를 본문 토큰 수로 가중 평균한 뒤 정규화한다. 이는 하나의 긴 attention 문맥과 다르다.
-- 이미지 예산은 70/140/280 토큰이다. 560/1120 그래프는 번들에 없으므로 CLI와 런타임이 명확한 오류를 반환한다. 기존 이미지 비율·bicubic 리사이즈를 유지한다.
-- 음성의 검색 구간은 기존 30초 창과 25초 간격을 유지한다. Core ML은 각 창의 모든 샘플을 최대 10초씩 나누어 처리하고 샘플 수로 가중 평균·정규화한다. PDF 페이지·코드 라인·영상 시점 등 기존 구간 위치를 보존한다.
-- 앱은 시작 시 준비된 텍스트 자산으로 공통 128토큰 질의 함수를 백그라운드에서 실행한다. 최초 다운로드에서는 텍스트 자산이 먼저 도착하면 `ModelDownload.onTextReady`가 `Engine.prepareQueryEncoder()`를 호출해 나머지 이미지·음성 자산을 받는 동안 질의 모델을 준비한다. 전체 다운로드 완료 시 `modelArrived()`는 이미 준비된 encoder를 유지하고 인덱싱을 시작한다. 모델 파일 확인과 최초 예측이 끝나야 query worker가 ready를 보낸다. 긴 유휴 후에는 encoder가 종료되고 다음 검색 패널·창 열기에서 다시 준비된다. 512토큰 질의·미디어·다른 문서 함수의 첫 사용은 별도의 장치 준비가 필요할 수 있다.
-- 자산의 예상 hash/revision과 device/inode/크기/mtime/ctime을 기록한 검증 receipt가 일치하면 매 프로세스마다 전체 SHA를 다시 계산하지 않는다. 파일 메타데이터가 바뀌거나 receipt가 없으면 다시 검증한다. 이는 임의로 바뀐 모델을 허용한다는 뜻이 아니다.
-- 패키지별 컴파일 결과를 안정된 경로에 저장하고 프로세스 간 파일 잠금으로 게시를 직렬화한다. Core ML의 장치별 specialization cache는 운영체제가 관리한다. 처음 실행하거나 캐시가 무효화되면 실제 준비 시간이 남으므로 최초 검색 지연이 0이라고 보장하지 않는다. 색인 worker는 사용한 텍스트 함수를 최대 6개까지 유지하고, 질의 worker는 최대 2개를 유지한다. worker 종료 또는 `close()`에서 해제한다.
+- All models use `MLComputeUnits.all`. ANE, GPU, and CPU are allowed, but Core ML decides operator placement and execution order. The public API **cannot enforce an ANE → GPU → CPU priority order**. [Apple compute units](https://developer.apple.com/documentation/coreml/mlcomputeunits/all)
+- Existing `Prompts` are retained for ordinary search, code, and documents. The query worker uses the 128-token function for ordinary queries and the 512-token function for longer queries. Queries are capped at 512 tokens including BOS/EOS. Indexing chooses the appropriate function from 32/48/64/128/256/512 tokens.
+- Long document/code segments are split into multiple windows without dropping body tokens, repeating the title prompt. Window vectors are averaged with weights based on body-token counts, then normalized. This is different from a single long attention context.
+- Image budgets are 70/140/280 tokens. The bundle does not include 560/1120 graphs, so the CLI and runtime return explicit errors for those budgets. Existing aspect-ratio handling and bicubic resizing are retained.
+- Audio search retains the existing 30-second windows at 25-second intervals. Core ML processes every sample in each window in pieces of up to 10 seconds, then averages by sample count and normalizes. Existing segment locations, including PDF pages, code lines, and video timestamps, are preserved.
+- At startup, the app runs the common 128-token query function in the background using available text assets. During the initial download, `ModelDownload.onTextReady` calls `Engine.prepareQueryEncoder()` as soon as text assets arrive, preparing the query model while image/audio assets continue downloading. When the full download completes, `modelArrived()` keeps the prepared encoder and starts indexing. The query worker reports ready only after model-file verification and the first prediction complete. After a long idle period, the encoder exits and is prepared again when the search panel/window next opens. First use of the 512-token query function, media models, or other document functions may require separate device preparation.
+- Full SHA verification is not repeated in every process when the verification receipt matches the expected asset hash/revision and device/inode/size/mtime/ctime. Changed file metadata or a missing receipt triggers verification again. This does not permit arbitrary model changes.
+- Package compilation results are stored at stable paths, with publication serialized by interprocess file locks. The operating system manages Core ML's device-specific specialization cache. Actual preparation remains necessary on first use or after cache invalidation, so zero first-search latency is not guaranteed. The indexing worker retains up to six text functions it has used; the query worker retains up to two. Worker exit or `close()` releases them.
 
-`auto`와 `coreml`은 모두 같은 Core ML 네이티브 런타임을 선택한다. 자산 누락이나 실행 실패를 다른 추론 엔진으로 대체하지 않는다. 질의는 텍스트 자산만으로 준비할 수 있지만 전체 인덱싱은 텍스트·vision·audio 자산 모두를 요구한다. `--backend llama`는 지원하지 않는다. 이름·Spotlight·키워드 검색은 모델과 독립적으로 동작한다.
+Both `auto` and `coreml` select the same native Core ML runtime. Missing assets or execution failures do not trigger fallback to a different inference engine. Queries can prepare with text assets alone, but full indexing requires text, vision, and audio assets. `--backend llama` is unsupported. Name, Spotlight, and keyword search operate independently of the model.
 
-새 통합 fingerprint는 `coreml-all-text128-windows512-vision280-audio10-v2`와 모델 revision·dtype·인덱싱 옵션을 포함한다. 이전 런타임의 벡터를 새 질의 벡터와 섞지 않는다. 네이티브 helper는 모델이 다운로드되고 전원 정책이 작업을 허용한 뒤 **새 런타임의 로드와 자산 검증에 성공한 경우에만** 파생 벡터를 지우고 다시 색인한다. 실패하면 이전 벡터는 디스크에 남는다. 이름과 활동 기록은 유지된다. 재색인 직후에는 의미 검색 범위가 줄어들며 처리한 파일부터 다시 늘어난다. 이전 의미 인덱스를 별도로 보관한 뒤 원자적으로 교체하는 방식은 아니다.
+The new unified fingerprint includes `coreml-all-text128-windows512-vision280-audio10-v2`, the model revision, dtype, and indexing options. Vectors from an older runtime are not mixed with new query vectors. After the model has downloaded and power policy permits work, the native helper clears derived vectors and reindexes **only after successfully loading and verifying the new runtime's assets**. On failure, previous vectors remain on disk. Names and activity records are preserved. Semantic-search coverage initially decreases during reindexing and grows again as files are processed. This does not retain a separate old semantic index for an atomic replacement.
 
-CLI는 다른 출처의 인덱스를 자동 재사용하지 않는다. 전환하려면 `index --reindex`를 사용하며 이 경우에도 새 런타임 검증이 기존 인덱스 초기화보다 먼저다.
+The CLI does not automatically reuse an index from a different source. Switching requires `index --reindex`; even then, new-runtime verification precedes resetting the existing index.
 
 ```sh
 digup download-model --backend coreml --to .dev/models
@@ -64,165 +64,165 @@ DIGUP_MODELS="$PWD/.dev/models" digup index <folder> --index .dev/coreml-index -
 DIGUP_MODELS="$PWD/.dev/models" digup search <query> --index .dev/coreml-index --backend coreml
 ```
 
-`DIGUP_COREML_MODELS`는 `CoreML/` 하위 폴더를 직접 지정한다. 기본 위치는 앱 Models 폴더의 `CoreML/`이다. Linux/Windows에는 네이티브 모델을 번들하지 않으며 명시적으로 구성한 `DIGUP_WORKER_DIR` 프로토콜만 유지한다. 저장소의 `worker/` 구현은 MLX용이므로 그 자체를 portable 모델 구현이라고 간주하지 않는다. Python 환경은 `uv`로 관리한다.
+`DIGUP_COREML_MODELS` points directly to the `CoreML/` subdirectory. The default is `CoreML/` under the app's Models folder. Linux/Windows do not bundle a native model and retain only the explicitly configured `DIGUP_WORKER_DIR` protocol. The repository's `worker/` implementation targets MLX and should not itself be considered a portable model implementation. Python environments are managed with `uv`.
 
-정밀도는 FP16으로 적용했다. [Apple의 ANE Transformer 설명](https://machinelearning.apple.com/research/neural-engine-transformers)은 FP16을 명시한다. BF16 가중치를 읽는다는 사실만으로 ANE BF16 네이티브 연산을 주장하지 않는다.
+The implementation uses FP16 precision. [Apple's ANE Transformer description](https://machinelearning.apple.com/research/neural-engine-transformers) explicitly identifies FP16. Reading BF16 weights alone is not evidence of native BF16 arithmetic on the ANE.
 
-### 현재 `.all` 실행 계획과 실제 미디어 검증 — 2026년 10월 15일
+### Current `.all` Compute Plans and Actual Media Validation — October 15, 2026
 
-Apple M5, macOS 27.0.1(26A434)에서 현재 revision의 준비된 `.mlmodelc`와 앱과 같은 `.all` 설정으로 `MLComputePlan`을 조회했다. 조회 프로세스에서 ANE·Apple M5 GPU·CPU가 모두 인식되는 것을 확인했다. 아래는 각 실행 연산에 대해 Core ML이 **선호한다고 보고한 장치**다.
+On an Apple M5 running macOS 27.0.1 (26A434), `MLComputePlan` was queried for the current revision's prepared `.mlmodelc` assets using the same `.all` configuration as the app. The inspection process recognized the ANE, Apple M5 GPU, and CPU. The table shows the device Core ML **reported as preferred** for each executable operation.
 
-| 함수 | ANE 연산 수 | GPU 연산 수 | CPU 연산 수 | 장치 미배정 상수 |
+| Function | ANE operations | GPU operations | CPU operations | Constants without device assignments |
 |---|---:|---:|---:|---:|
-| 텍스트 `embed_128` | 3,862 | 0 | 0 | 3,151 |
-| 이미지 `vision_70` | 2,389 | 0 | 0 | 2,200 |
-| 이미지 `vision_140` | 2,389 | 0 | 0 | 2,200 |
-| 이미지 `vision_280` | 2,389 | 0 | 0 | 2,200 |
-| 음성 `main` | 2,702 | 197 | 4 | 3,912 |
+| Text `embed_128` | 3,862 | 0 | 0 | 3,151 |
+| Image `vision_70` | 2,389 | 0 | 0 | 2,200 |
+| Image `vision_140` | 2,389 | 0 | 0 | 2,200 |
+| Image `vision_280` | 2,389 | 0 | 0 | 2,200 |
+| Audio `main` | 2,702 | 197 | 4 | 3,912 |
 
-음성의 연산별 예상 workload weight를 장치별로 합하면 ANE **97.3273%**, GPU **2.2410%**, CPU **0.4317%**다. 텍스트 128과 세 이미지 함수의 예상 workload는 모두 ANE에 배정된다. 미배정 항목은 모두 `const`이며 계산 비용이 보고되지 않았다. GPU는 허용 설정뿐 아니라 음성 모델의 `matmul`·`softmax`·`tanh` 등을 포함한 197개 연산의 선호 장치로 나타났다.
+Summing the audio model's estimated per-operation workload weights by device gives **97.3273% ANE**, **2.2410% GPU**, and **0.4317% CPU**. The estimated workloads for text128 and all three image functions are assigned entirely to the ANE. All unassigned entries are `const`, with no reported compute cost. GPU use is reflected not just in the allowed configuration: it is the preferred device for 197 audio-model operations, including `matmul`, `softmax`, and `tanh`.
 
-이는 실행 전의 **예상 배치와 계산량**이며 실제 실행 중 장치 사용률·실행 시간 비율·전력·에너지 측정이 아니다. CPU에서 수행하는 토크나이저, 이미지·음성 전처리, 벡터 정규화와 검색 DB 작업도 이 모델 그래프 수치에 포함되지 않는다. 현재 기기의 계획을 다른 장치나 운영체제에 그대로 적용할 수 없다. Apple은 `preferred`를 프레임워크가 연산 실행에 선호하는 장치, `weight`를 전체 모델 대비 예상 연산 workload로 정의한다. [Apple MLComputePlan](https://developer.apple.com/documentation/coreml/mlcomputeplan-1w21n)
+These are **estimated placement and workloads before execution**, not measurements of runtime utilization, execution-time shares, power, or energy. CPU work for tokenization, image/audio preprocessing, vector normalization, and search-database operations is not included in these model-graph figures. This device's plan cannot be assumed to apply to other devices or operating systems. Apple defines `preferred` as the device the framework prefers for an operation, and `weight` as the operation's estimated workload relative to the full model. [Apple MLComputePlan](https://developer.apple.com/documentation/coreml/mlcomputeplan-1w21n)
 
-같은 날 debug 빌드에서 `DIGUP_TEST_COREML=1`로 `CoreMLMediaInferenceTests.imagesAudioAndVideoFramesRemainSearchable`를 실제 실행했다. 이미지·음성 encoder와 공유 text transformer를 모두 거친 768차원 유한 벡터를 이전 런타임으로 저장한 고정 참조와 비교했다.
+On the same day, `CoreMLMediaInferenceTests.imagesAudioAndVideoFramesRemainSearchable` was actually run in a debug build with `DIGUP_TEST_COREML=1`. Finite 768-dimensional vectors produced through the image/audio encoders and shared text transformer were compared with fixed references saved using the previous runtime.
 
-| 고정 입력 | 참조 벡터와 cosine |
+| Fixed input | Cosine similarity to reference vector |
 |---|---:|
-| 영상 프레임 경로에 쓰는 이미지 예산 70 | 0.99858505 |
-| 사진 예산 140 | 0.99939567 |
-| 스크린샷 예산 280 | 0.9998209 |
-| 음성 | 0.999867 |
+| Image budget 70, used by the video-frame path | 0.99858505 |
+| Photo budget 140 | 0.99939567 |
+| Screenshot budget 280 | 0.9998209 |
+| Audio | 0.999867 |
 
-해당 테스트 1개는 **130.705초**에 통과했다. 새 `.all` 미디어 경로의 첫 실행으로 컴파일·장치 함수 준비와 추론을 함께 포함하며, debug 토크나이저 초기화만 5.024초였다. 모든 OS 캐시를 지운 조건을 의미하지 않으며 준비된 상태의 파일당 추론 지연이나 release 앱의 시작 시간으로 해석하지 않는다. 존재하지 않는 이미지의 개별 실패도 확인했다. 예산 70 사례는 고정 사진을 영상 프레임 경로와 같은 예산으로 처리한 것으로, 영상 디코딩 전체를 실행한 검증은 아니다.
+That single test passed in **130.705 seconds**. This was the first execution of the new `.all` media path and included compilation, device-function preparation, and inference; debug tokenizer initialization alone took 5.024 seconds. It was not a run with all OS caches cleared, and it should not be interpreted as warm per-file inference latency or release-app startup time. Individual failure for a nonexistent image was also verified. The budget-70 case processed a fixed photo with the same budget as the video-frame path; it did not validate end-to-end video decoding.
 
-네 개 고정 입력의 참조 일치 확인이며 전체 검색 품질이나 전력 효율 평가가 아니다.
+This verifies agreement with four fixed reference inputs, not overall search quality or energy efficiency.
 
-### 현재 빌드의 통합 검증과 시작 지연 — 2026년 10월 15일
+### Current Build Integration Validation and Startup Latency — October 15, 2026
 
-- `DIGUP_TEST_COREML=1 DIGUP_TEST_SPOTLIGHT=1 swift test --no-parallel`: DigUpKit 119개와 CoreMLRuntime 24개, 총 143개 통과. 실제 모델 참조, 다국어 query128 padding, 128/129/512 토큰 경계, 비연속 media tensor stride, 긴 문서, 모델 준비 실패와 파일 읽기 실패의 구분을 포함한다.
-- 실제 Core ML-only CLI로 임시 PDF·이미지·스크린샷·음성을 처리해 모두 done, text/image/audio 벡터 저장을 확인했다. 일반 txt 제외, query/index 출처 일치, 키워드·의미 검색, 반복 질의 캐시, reload, 모델 누락 시 키워드 검색 유지, 제거된 llama backend 거부도 통과했다. 별도 실제 12초 MPEG-TS 영상에서는 3개 프레임 벡터와 시점 정보를 확인했다.
-- release query worker를 두 번 새로 실행했다. 첫 ready(모델 준비 포함)는 19,660.8ms, 같은 캐시를 이용한 두 번째는 782.8ms였다. 준비 후 첫 질의는 각각 8.9ms/6.7ms, 서로 다른 후속 질의 5개 중앙값은 7.2ms/6.6ms였다. worker 자체에는 질의 벡터 캐시가 없으므로 모두 실제 추론이다. 동시에 색인 중이던 기기의 작은 표본이며, 전체 UI 검색 시간이나 OS 캐시를 모두 지운 측정은 아니다.
-- `./build.sh`로 release 앱과 helper를 빌드·서명하고 실제 앱을 재실행했다. 실제 앱의 질의 encoder는 시작 후 19.6초에 준비됐으며 파일·Spotlight 검색과 병렬로 진행했다. 새 helper에서 llama/ggml 심볼이 없음을 확인했다. 기존 사용자 DB를 백업한 뒤 새 fingerprint로 자동 재색인이 진행 중이며, 처리된 파일의 검색 벡터가 다시 늘어나는 것을 확인했다.
+- `DIGUP_TEST_COREML=1 DIGUP_TEST_SPOTLIGHT=1 swift test --no-parallel`: 143 tests passed, comprising 119 DigUpKit tests and 24 CoreMLRuntime tests. Coverage includes actual model references, multilingual query128 padding, 128/129/512-token boundaries, noncontiguous media-tensor strides, long documents, and the distinction between model-preparation failures and file-reading failures.
+- The actual Core ML-only CLI processed temporary PDF, image, screenshot, and audio inputs; all reached done, with text/image/audio vectors stored. Validation also covered exclusion of ordinary txt files, matching query/index sources, keyword and semantic search, repeated-query caching, reload, keyword search with missing model assets, and rejection of the removed llama backend. A separate actual 12-second MPEG-TS video produced three frame vectors with timestamps.
+- A release query worker was launched twice as a new process. The first ready time, including model preparation, was 19,660.8 ms; the second, using the same caches, was 782.8 ms. The first query after preparation took 8.9 ms/6.7 ms respectively, and the medians for five distinct subsequent queries were 7.2 ms/6.6 ms. The worker itself has no query-vector cache, so all were actual inference calls. This was a small sample on a device also indexing in the background, not an end-to-end UI measurement or a run with all OS caches cleared.
+- `./build.sh` built and signed the release app and helper, and the actual app was relaunched. Its query encoder became ready 19.6 seconds after startup, in parallel with file/Spotlight search. The new helper was checked for the absence of llama/ggml symbols. After backing up the existing user databases, automatic reindexing with the new fingerprint was in progress, and search-vector counts increased as files were processed.
 
-최초 비용을 없애지는 않았다. 다운로드 중·앱 시작 시 준비하여 사용자가 타이핑하기 전에 지불하고, 이후에는 검증 receipt와 패키지/OS 컴파일 캐시를 재사용한다. 준비가 끝나기 전에 검색하면 의미 결과는 기다릴 수 있지만 이름·Spotlight·키워드 결과는 먼저 표시한다.
+The initial cost has not been eliminated. Preparation during download and app startup pays that cost before the user types; subsequent runs reuse verification receipts and package/OS compilation caches. Searching before preparation completes may delay semantic results, but name, Spotlight, and keyword results appear first.
 
-### 색인 중 반복 모델 로드 수정 — 2026년 10월 15일
+### Fix for Repeated Model Loading During Indexing — October 15, 2026
 
-실제 helper 로그에서 6가지 길이의 함수를 2개만 캐시하던 정책이 병목으로 확인됐다. 한 snapshot의 모델 로드 402회 중 최초 6회를 제외한 396회가 216.2초를 차지했고 반복 로드 중앙값은 482ms였다. OS의 장치 컴파일 캐시가 있어도 `MLModel` 인스턴스를 다시 만드는 비용은 남는다. 색인 중 사용한 6개 함수를 계속 보관하도록 수정했다. 입력 shape·전처리·모델·fingerprint는 바꾸지 않아 재색인이 필요 없다.
+Actual helper logs identified the policy of caching only two of six sequence-length functions as a bottleneck. In one snapshot of 402 model loads, the 396 loads after the initial six consumed 216.2 seconds, with a median repeated-load time of 482 ms. Recreating `MLModel` instances still costs time even with the OS device-compilation cache. The indexing worker was changed to retain all six functions as they are used. Input shapes, preprocessing, model, and fingerprint were unchanged, so reindexing is unnecessary.
 
-release worker에서 같은 6개 shape를 3회 순환했다. 최초 6회 준비를 제외한 12회 합계는 수정 전 8,856.1ms → 수정 후 477.5ms, 중앙값은 682.5ms → 22.7ms였다. 18개 벡터 모두 Float32 바이트가 같았다. 서로 다른 길이를 반복하는 합성 입력이며 전체 파일 색인 속도가 같은 비율로 개선된다는 뜻은 아니다. 이때 별도 장치 준비와 기존 앱의 배경 색인도 실행 중이었다. 실제 모델 참조·긴 문서 처리 회귀 테스트도 통과했다.
+A release worker cycled through the same six shapes three times. Excluding the initial six preparations, the total for 12 calls fell from 8,856.1 ms to 477.5 ms, and the median fell from 682.5 ms to 22.7 ms. All 18 vectors were byte-identical in Float32. These were synthetic inputs repeatedly alternating lengths, not evidence that total file-indexing throughput improves by the same factor. Separate device preparation and the existing app's background indexing were also running. Actual-model reference and long-document regression tests passed as well.
 
-같은 6개 입력을 한 번 처리하고 2초 후의 별도 worker 메모리 비교는 RSS 395.30→1,106.12MiB, physical footprint 181→198MiB였다. 파일 매핑의 resident 증가가 컸다. Neural Engine 메모리가 두 프로세스에서 서로 다른 항목으로 집계되어 footprint 차이만으로 전체 비용을 판단할 수 없다. 추가 메모리 비용이 있으며 worker가 종료되면 해제된다. 이 측정은 텍스트 경로이고 모든 미디어 모델을 동시에 로드한 최대값은 아니다.
+In a separate worker-memory comparison, measured two seconds after processing the same six inputs once, RSS rose from 395.30 to 1,106.12 MiB and physical footprint from 181 to 198 MiB. Resident file mappings accounted for much of the increase. Neural Engine memory was accounted for under different categories in the two processes, so the footprint difference alone cannot establish the total cost. There is an additional memory cost, released when the worker exits. This measurement covers the text path, not peak usage with every media model loaded simultaneously.
 
-ANN의 50,000개 자동 전환 기준은 인덱스별 구간 벡터 수다. 02:37 확인 시 일반 인덱스 384개·코드 인덱스 524개라 모두 exact 경로였고 HNSW 그래프를 만들지 않았다. 현재 지연은 ANN 구축이나 학습 때문이 아니다. USearch HNSW는 고정된 임베딩 벡터 사이 연결을 추가하는 검색 자료구조이며, 모델 가중치를 학습하지 않는다.
+ANN's automatic 50,000 threshold counts segment vectors per index. At the 02:37 check, the main index had 384 vectors and the code index 524; both used exact search and had no HNSW graph. The observed latency was not caused by ANN construction or training. USearch HNSW is a search data structure that adds connections between fixed embedding vectors; it does not train model weights.
 
-### 이전 텍스트 런타임 실험 — 현재 전체 Core ML 경로의 결과와 구분
+### Earlier Text-Runtime Experiments — Separate from the Current Full Core ML Results
 
-아래 결과는 미디어가 이전 런타임을 사용하고 텍스트가 `.cpuAndNeuralEngine`으로 실행되던 단계의 기록이다. 현재 `.all` 배치, 128토큰 질의 준비 및 Core ML vision/audio의 실제 실행 결과를 대신하지 않는다.
+The following results were recorded when media still used the previous runtime and text ran with `.cpuAndNeuralEngine`. They do not substitute for measurements of the current `.all` placement, 128-token query preparation, or Core ML vision/audio execution.
 
-- 당시 M5의 6개 텍스트 함수 실행 계획에서 비용이 배정된 연산 3,862개가 ANE, CPU/GPU 0개였다. 비용 0인 미배정 연산 3,151개도 있었다. [MLComputePlan](https://developer.apple.com/documentation/coreml/mlcomputeplan-85vdw)의 배치 정보이며 전력 측정은 아니다.
-- 텍스트 자산 SHA-256, 저장 토크나이저 fixture 19개 및 별도 Unicode/특수 토큰 사례 124개가 일치했다. 당시 실제 Core ML 테스트 6개가 통과했다.
-- 기존 Metal 텍스트와 23개 입력을 비교한 cosine 최소는 0.99970439, 평균은 0.99991528이었다. 저장된 미디어 참조 4개에 대한 작은 검색 비교에서 순위가 유지됐다. 전체 검색 품질 평가가 아니다.
-- 준비된 한국어 질의 20회 중앙값은 5.82ms, 같은 실행의 초기화는 약 5초, 첫 예측은 약 525ms였다. 현재 질의 준비 정책의 지연이나 에너지 보장이 아니다.
+- On the M5 at that stage, compute plans for all six text functions assigned 3,862 costed operations to the ANE and zero to the CPU/GPU. Another 3,151 unassigned operations had zero cost. This is placement information from [MLComputePlan](https://developer.apple.com/documentation/coreml/mlcomputeplan-85vdw), not a power measurement.
+- Text-asset SHA-256 checks, 19 saved tokenizer fixtures, and 124 additional Unicode/special-token cases matched. Six actual Core ML tests passed at that stage.
+- Across 23 inputs compared with the previous Metal text implementation, minimum cosine similarity was 0.99970439 and the mean was 0.99991528. Rankings were preserved in a small search comparison against four saved media references. This was not a full search-quality evaluation.
+- The median of 20 warm Korean-query calls was 5.82 ms. Initialization in the same run took about five seconds, and the first prediction about 525 ms. These figures do not guarantee latency or energy use under the current query-preparation policy.
 
-현재 전체 모달리티 경로에는 전처리·다중 창 처리·무결성 캐시·안전한 fingerprint 전환을 검증하는 테스트를 추가했다. 새 Core ML-only CLI에서도 임시 PDF·코드와 가짜 worker를 사용하는 진행률 통합 검증이 통과했다. 실제 모델과 전체 통합 검증은 위 현재 경로 기록에 정리했으며, 전력 효율은 아직 측정하지 않았다.
+Tests were added for preprocessing, multi-window handling, integrity caching, and safe fingerprint transitions in the current full multimodal path. Progress integration checks using temporary PDFs/code and a fake worker also passed with the new Core ML-only CLI. Actual-model and full integration validation are recorded in the current-path sections above; energy efficiency has not yet been measured.
 
-## 탐험한 파일 중심의 정책 — 구현됨
+## Policy Centered on Explored Files — Implemented
 
-기본 범위는 사용자가 선택한 일반 폴더와 별도로 활성화한 코드 폴더다. Finder에서 다른 위치의 파일을 열었다고 검색 범위를 자동 확장하지 않는다.
+The default scope is the user's selected ordinary folders and separately enabled code folders. Opening a file elsewhere in Finder does not automatically expand the search scope.
 
-| 신호 | 수집 방식 | 의미와 한계 |
+| Signal | Collection method | Meaning and limitations |
 |---|---|---|
-| 앱에서 열기 | 열기 요청 시 기록 | 성공 완료가 아닌 사용 의도이며, 실패해도 우선순위 힌트로 남을 수 있음 |
-| 명시적 Quick Look | Space/Quick Look과 열린 패널에서의 이동 | 자동 썸네일·검색 결과 표시만으로는 기록하지 않음 |
-| Finder·다른 앱 | 시작 시 Spotlight 조회, 이후 NSMetadataQuery 갱신 | 시스템이 보고하는 `kMDItemLastUsedDate`; 모든 앱 내부 열기를 보장하지 않음 |
+| Opening in the app | Recorded when an open request is made | Represents intent, not confirmed success; a failed open may still remain as a priority hint |
+| Explicit Quick Look | Space/Quick Look and navigation within an open preview panel | Automatic thumbnails and merely displaying search results do not record activity |
+| Finder/other apps | Spotlight query at startup, followed by NSMetadataQuery updates | Uses system-reported `kMDItemLastUsedDate`; does not guarantee detection of every in-app open |
 
-Apple은 LaunchServices를 통한 열기에서 최근 사용 날짜를 자동 갱신한다고 설명한다. 편집기 내부 파일 열기 등은 이 경로를 거치지 않을 수 있다. 권한을 넓혀 전역 키 입력·UI를 감시하거나 비공개 최근 문서 DB를 읽지 않는다. [Apple 메타데이터 정의](https://developer.apple.com/library/archive/documentation/CoreServices/Reference/MetadataAttributesRef/Reference/CommonAttrs.html)
+Apple describes automatic last-used-date updates for opens through LaunchServices. Opening files inside an editor may not take that route. The app does not broaden permissions to monitor global keystrokes/UI or read private recent-document databases. [Apple metadata definitions](https://developer.apple.com/library/archive/documentation/CoreServices/Reference/MetadataAttributesRef/Reference/CommonAttrs.html)
 
-`activity(path, last_used, source)`에 최근 30일의 파일별 마지막 사용만 저장한다. 최초 순회 전에 발견한 사용 기록도 보존한다. 같은/오래된 타임스탬프는 무시하며 삭제·이름 변경·선택 폴더 변경·제외 설정과 함께 정리한다. 이미 완성된 파일은 다시 열었다는 이유로 재임베딩하지 않는다. 내용이 바뀌어 대기 상태로 돌아오면 보존된 최근 사용 기록으로 우선 처리한다.
+`activity(path, last_used, source)` stores only each file's latest use within the last 30 days. Activity discovered before the initial crawl is preserved too. Equal or older timestamps are ignored, and records are reconciled with deletions, renames, selected-folder changes, and exclusions. A completed file is not re-embedded merely because it was reopened. If its content changes and it returns to pending, preserved recent-use information gives it priority.
 
-임베딩 대상은 이미지·스크린샷·영상·음성·PDF·코드다. 일반 txt/md/Office 문서는 Spotlight 이름·본문 검색에 맡긴다. 코드 폴더에 명시적으로 포함된 저장소 문서는 기존 코드 문맥의 일부로 유지한다. 길이를 계산하려고 모든 문서를 먼저 읽지는 않는다. 추후 긴 일반 문서까지 확장할 때는 명시적 선택이나 메타데이터 기반 기준을 추가한다.
+Embedding targets are images, screenshots, video, audio, PDFs, and code. Ordinary txt/md/Office documents use Spotlight name/body search. Repository documents explicitly included in code folders remain part of the existing code context. Documents are not all read upfront just to determine their length. Extending this to long ordinary documents later will require explicit selection or metadata-based criteria.
 
-처리 순서는 최근 사용한 미완료 파일(긴 PDF의 남은 페이지 포함), 나머지 대기 파일, 나머지 긴 파일이다. 메인과 코드 인덱스의 최근 작업을 벌크 작업보다 먼저 확인한다. 벌크는 최대 8파일씩 큐를 다시 확인하며 새 활동 알림이 오면 처리 단위 사이에서 양보한다. 이는 열린 파일만 영구적으로 색인한다는 의미가 아니다. 이후 나머지 적격 파일은 기존 백그라운드 계획에 따라 처리한다.
+Processing order is recently used unfinished files, including remaining pages of long PDFs, then other pending files, then other long files. Recent work in both the main and code indexes is checked before bulk work. Bulk processing checks the queue again after at most eight files and yields between processing units when new activity arrives. This does not mean only opened files are ever indexed: the remaining eligible files subsequently follow the existing background schedule.
 
-진행률은 이 작은 묶음의 완료율이 아니라 전체 파일 수와 대기 수로 계산한다. 파일·묶음 완료마다 helper가 최신 준비·대기·실패·건너뜀 개수를 보내며, 묶음이 끝나면 해당 진행 상태를 해제한다. 최근 4개만 처리하고 나머지 597개가 대기할 때 `100%`와 오래된 `0 files searchable`를 동시에 표시하던 문제를 수정했다. Settings의 준비 개수는 의미 검색 범위를 뜻하며 Spotlight 이름 검색과 구분한다. 진행률 단위 테스트 3개와 `uv run --no-project scripts/test-index-progress.py .build/debug/digup` 통합 검증으로 최근 묶음·메인/코드 전환·실패/건너뜀·긴 PDF 후속 처리·재시작을 확인했다.
+Progress is calculated from total and pending file counts, not completion of these small batches. The helper sends current ready, pending, failed, and skipped counts after each file/batch completes, and clears batch progress when the batch ends. This fixes the simultaneous display of `100%` and a stale `0 files searchable` after only four recent files had been processed while 597 remained pending. Ready counts in Settings describe semantic-search coverage, distinct from Spotlight name search. Three progress unit tests and the `uv run --no-project scripts/test-index-progress.py .build/debug/digup` integration check verified recent batches, main/code transitions, failures/skips, later processing of long PDFs, and restarts.
 
-최근 파일도 저전력·발열·충전기·허용 시간대 정책을 우회하지 않는다. 모델이 없거나 처리가 대기 중이어도 앱 이름과 Spotlight 결과는 사용할 수 있다. 현재 활동 알림도 전체 폴더 재조사를 요청하며, 부분 갱신은 아래 후속 설계다. 오디오·영상의 파일 내부 재개도 아직 구현하지 않았다.
+Recent files do not bypass low-power, thermal, charger, or allowed-hours policies. Application names and Spotlight results remain available without a model or while processing is waiting. Activity notifications currently also request a full folder rescan; incremental updates are part of the future design below. Resuming within an audio/video file is not yet implemented either.
 
-네이티브 앱이 helper에 `--rich-content-only --recent-first`를 전달한다. CLI 기본 정책은 유지하며 해당 플래그로 선택할 수 있다. 스키마 5→6 마이그레이션은 활동 테이블을 추가하고 기존 벡터를 재계산하지 않는다. 다음 순회에서 일반 문서의 자체 색인만 제거되고 Spotlight로 검색된다.
+The native app passes `--rich-content-only --recent-first` to the helper. The CLI retains its default policy and can opt in with those flags. The schema 5→6 migration adds the activity table without recalculating existing vectors. The next crawl removes only the app's own ordinary-document index entries; those files remain searchable through Spotlight.
 
-## 벡터 DB — USearch 구현됨
+## Vector Database — USearch Implemented
 
-SQLite는 파일·구간·FTS·FP16 벡터의 원본 저장소로 유지한다. 별도로 고정한 USearch 2.24.0 C API를 연결했다. 상위 버전의 NumKong 패키지에서 Xcode 빌드 링크 문제가 재현되어, 같은 필요한 C API를 제공하는 2.24.0을 선택했다. 외부 서버를 띄우지 않는다. [USearch](https://github.com/unum-cloud/USearch/tree/v2.24.0)
+SQLite remains the source of truth for files, segments, FTS, and FP16 vectors. The separately pinned USearch 2.24.0 C API is integrated. A newer release's NumKong package reproduced an Xcode linking problem, so 2.24.0 was selected because it provides the required C API. No external server is started. [USearch](https://github.com/unum-cloud/USearch/tree/v2.24.0)
 
-`Searcher`는 큰 집합에 대해 모달리티별 HNSW 그래프를 만들고, 작은 전체 집합이나 좁은 필터에서는 exact scan을 사용한다. FP16 768차원·cosine을 사용한다. ANN 후보를 원래 벡터의 점수로 다시 계산하고 파일별로 합친다. 한 파일의 많은 구간이 후보를 차지하면 더 많은 후보를 요청하고, 충분한 파일 다양성을 확보하지 못하면 해당 모달리티를 exact로 처리한다. FTS 후보와 질의의 파일 종류 힌트에 해당하는 후보도 합쳐서 다시 계산한다.
+`Searcher` builds per-modality HNSW graphs for large collections and uses exact scans for small collections or narrow filters. Vectors are 768-dimensional FP16 with cosine distance. ANN candidates are rescored using the original vectors and grouped by file. If many segments from one file consume the candidate list, more candidates are requested; if sufficient file diversity cannot be obtained, that modality falls back to exact search. FTS candidates and candidates matching the query's file-kind hints are also included and rescored.
 
-기본 전환점은 50,000구간이다. HNSW connectivity는 32, 삽입 탐색 폭은 256, 검색 탐색 폭은 2,048로 설정했다. 종류 필터가 2,048구간 미만을 고르면 전수 계산한다. `Searcher.VectorSearchMode`의 `exact`·`approximate`로 같은 인덱스의 두 경로를 검증할 수 있다. 이 설정이 모든 컬렉션의 최적값이라는 뜻은 아니다.
+The default crossover setting is 50,000 segments. HNSW connectivity is 32, insertion expansion is 256, and search expansion is 2,048. A kind filter selecting fewer than 2,048 segments uses an exhaustive scan. `Searcher.VectorSearchMode` offers `exact` and `approximate` to validate both paths on the same index. These settings are not claimed to be optimal for every collection.
 
-현재 z-score 방식과의 차이가 중요하다. ANN 상위 결과를 전체 점수 분포처럼 취급하지 않는다. 질의와 독립적으로 고른 모달리티별 표본으로 평균·분산을 구하고 실제 모달리티별 구간 수로 가중한다. 긴 PDF의 후반 구간이 기존 검색 척도를 바꾸지 않는 규칙도 유지한다. 이 표본 추정은 기존 전체 분포와 완전히 같지는 않으므로 exact baseline과 함께 검증한다.
+The distinction from the current z-score method matters. Top ANN results are not treated as the full score distribution. Means and variances are estimated from query-independent samples per modality and weighted by actual per-modality segment counts. The rule that later pages of long PDFs do not change the existing search scale is preserved. This sample estimate is not identical to the previous full distribution, so it is validated against an exact baseline.
 
-캐시는 `index.sqlite.ann/`, `code.sqlite.ann/`에 저장한다. SQLite의 일관된 읽기 스냅샷에서 구간 ID·벡터 해시·모달리티·source를 읽어 추가/변경/삭제를 그래프에 반영한다. ID 재사용과 모델 변경도 구분한다. 그래프 파일을 완성한 뒤 체크섬을 넣은 manifest를 원자적으로 교체한다. 프로세스 간 잠금으로 로드·게시·이전 캐시 정리가 서로 충돌하지 않도록 한다. 손상·누락·버전 불일치는 재구성하거나 exact 검색으로 복구한다. 캐시는 최대 30초 간격으로 저장하며 오래된 캐시는 다음 로드에서 DB와 다시 대조한다. SQL과 ANN을 각각 원본처럼 이중 쓰지 않는다.
+Caches are stored in `index.sqlite.ann/` and `code.sqlite.ann/`. Segment IDs, vector hashes, modalities, and source are read from a consistent SQLite snapshot to reconcile additions, changes, and deletions in the graph. ID reuse and model changes are distinguished too. Once graph files are complete, a manifest containing checksums is atomically replaced. Interprocess locks prevent loading, publication, and old-cache cleanup from conflicting. Corruption, missing files, and version mismatches trigger reconstruction or recovery through exact search. Caches are saved at most once every 30 seconds; stale caches are reconciled with the database on the next load. SQL and ANN are not independently written as two sources of truth.
 
-그래프를 만든 뒤 중복 FP16 행렬은 해제한다. 초기 생성과 reload에는 전체 벡터를 잠시 읽고 해시하므로 순간 메모리·I/O 비용이 남아 있다. `releaseVectors`는 그래프도 해제한다. 코드 검색을 끄면 코드 ANN 캐시도 삭제하며 표시하는 저장 공간에 캐시 크기를 포함한다.
+After graph construction, the duplicate FP16 matrix is released. Initial construction and reload still temporarily read and hash all vectors, so transient memory and I/O costs remain. `releaseVectors` also releases the graph. Disabling code search deletes its ANN cache, and displayed storage usage includes cache sizes.
 
-첫 그래프 생성이 오래 걸려도 이름·Spotlight 결과가 기다리지 않도록 네이티브 앱의 로컬 검색을 별도 큐로 분리했다. 의미 결과는 준비된 뒤 합쳐진다. 캐시 생성은 현재 검색 프로세스에서 수행하며, 백그라운드 helper가 전원 정책 아래 미리 생성하는 구조는 후속 개선이다.
+The native app's local search runs on a separate queue so that name/Spotlight results do not wait for a slow initial graph build. Semantic results are merged once ready. Cache construction currently runs in the search process; having the background helper prebuild it under power policy remains future work.
 
-768차원 FP16 원본은 구간당 1,536바이트로 10만 구간 153.6MB, 100만 구간 1.536GB이며 그래프·메타데이터·저장 원본·임시 버퍼는 추가다. 크기 기준은 파일 수가 아닌 구간 수다. 현재 원본은 SQLite와 그래프에 각각 저장되므로 저장 공간 감소를 주장하지 않는다.
+Raw 768-dimensional FP16 vectors require 1,536 bytes per segment: 153.6 MB for 100,000 segments and 1.536 GB for one million. Graphs, metadata, stored source data, and temporary buffers are additional. Capacity is measured in segments, not files. Vectors are currently stored in both SQLite and the graph, so no storage reduction is claimed.
 
-후속 개선은 durable 변경 로그로 전체 해시 재조사 비용을 줄이는 것, 백그라운드 세대 생성, 좁은 범위·다국어·모달리티별 실제 검색 평가, 처리당 에너지 측정이다. LanceDB는 아직 도입하지 않았다. [SQLite의 로컬 저장소 적합성](https://www.sqlite.org/whentouse.html), [LanceDB의 대체 인덱스](https://docs.lancedb.com/indexing/vector-index)와 비교한 초기 설계에서 USearch를 실제 선택한 상태다.
+Future improvements include a durable change log to reduce full hash-rescan costs, background generation builds, actual search evaluations across narrow scopes/languages/modalities, and energy-per-operation measurements. LanceDB has not been adopted. The initial design compared [SQLite's suitability for local storage](https://www.sqlite.org/whentouse.html) and [LanceDB's alternative indexes](https://docs.lancedb.com/indexing/vector-index); USearch is the implementation actually selected.
 
-### ANN 실측과 한계
+### ANN Measurements and Limitations
 
-M5에서 release 빌드로 50,000개의 768차원 FP16 합성 벡터를 평가했다. 질의와 벡터는 고정 시드의 무작위 단위 벡터이며 실제 파일 임베딩을 대표하지 않는다. 아래 지연은 준비된 질의 벡터를 사용한 검색 시간으로 모델 추론을 포함하지 않는다. p95는 질의 10회의 작은 표본이다.
+A release build on the M5 evaluated 50,000 synthetic 768-dimensional FP16 vectors. Queries and vectors were fixed-seed random unit vectors, not representative of actual file embeddings. Latencies below use prepared query vectors and exclude model inference. The p95 values come from a small sample of ten queries.
 
-| 최종 설정 M32 / 생성 256 / 검색 2,048 | 결과 |
+| Final settings: M32 / build 256 / search 2,048 | Result |
 |---|---:|
-| 최초 그래프 생성 | 227.044초 |
-| 최초 ANN 질의 | 14.83ms |
-| 준비된 ANN 검색 p95 | 14.76ms |
-| 준비된 exact 검색 p95 | 13.31ms |
-| 상위 10개 결과 재현율 | 100/100 |
+| Initial graph construction | 227.044 s |
+| First ANN query | 14.83 ms |
+| Warm ANN search p95 | 14.76 ms |
+| Warm exact search p95 | 13.31 ms |
+| Top-10 recall | 100/100 |
 
-이 규모와 데이터에서는 **ANN이 더 빠르지 않았다.** 앞선 검색 폭 1,024 실험은 ANN 10.80ms, exact 12.87ms였지만 재현율이 94/100으로 98% 기준을 충족하지 못해 채택하지 않았다. 최종 검색 폭 2,048에서는 그 기준을 낮추지 않고 전체 ANN 테스트 5개가 통과했다. 작은 기본 테스트의 2,500구간도 100/100이었다.
+At this scale and with this data, **ANN was not faster**. An earlier search-expansion-1,024 experiment measured ANN at 10.80 ms and exact search at 12.87 ms, but its 94/100 recall missed the 98% criterion and was not adopted. With the final expansion of 2,048, all five ANN tests passed without lowering that criterion. The small default test with 2,500 segments also achieved 100/100.
 
-자동 전환점 50,000은 USearch를 적용하기 위한 초기 기준이며 검증된 성능 교차점은 아니다. 실제 미디어·코드 임베딩과 더 큰 컬렉션에서 조정해야 한다. 최초 생성은 검색 큐를 오래 점유하므로 이름 검색 큐를 분리했으며, 캐시를 다시 사용할 수 있어도 전체 해시 대조 비용은 남는다. 현재 결과만으로 검색 속도나 전력 절감을 주장하지 않는다.
+The automatic threshold of 50,000 is an initial setting for introducing USearch, not a validated performance crossover. It needs tuning with actual media/code embeddings and larger collections. Initial construction occupies the search queue for a long time, hence the separate name-search queue. Even when caches can be reused, full hash reconciliation still has a cost. These results alone do not justify claims of faster search or lower energy use.
 
-## 후속 인덱싱 설계
+## Future Indexing Design
 
-검색 가능 상태를 이름·시스템 텍스트, 자체 추출 텍스트, 의미 벡터로 분리한다. 현재 Spotlight는 모델과 독립적이지만 자체 FTS 추출과 벡터 생성의 완전한 분리는 후속 과제다.
+Separate search readiness into names/system text, locally extracted text, and semantic vectors. Spotlight is already independent of the model, but fully separating local FTS extraction from vector generation remains future work.
 
-**변경 경로만 갱신한다.** FSEvents의 경로·flags·event ID를 helper에 전달하고, 작은 debounce 창으로 중복을 합친다. 파일 생성·수정·삭제는 그 파일만 처리하며 디렉터리 변경은 해당 하위 트리로 범위를 제한한다. 현재 `FolderWatcher`는 flags와 ID를 버리므로 이 전달 구조부터 바꿔야 한다. dropped event, `MustScanSubDirs`, 이벤트 이력 소실, 마운트 복구 때는 전체 재조정으로 복구하고 완료한 event ID만 저장한다. 읽기 실패를 파일 삭제로 취급하지 않도록 수집의 완전성도 기록한다.
+**Update only changed paths.** Pass FSEvents paths, flags, and event IDs to the helper, merging duplicates within a small debounce window. File creation/modification/deletion should process only that file; directory changes should be scoped to the affected subtree. `FolderWatcher` currently discards flags and IDs, so that handoff must change first. Dropped events, `MustScanSubDirs`, missing event history, and mount recovery should trigger full reconciliation, and only completed event IDs should be persisted. Record crawl completeness so that a read failure is not mistaken for deletion.
 
-**다시 계산할 내용을 줄인다.** 크기·mtime은 빠른 변경 후보 판정에 유지한다. 후보 파일만 해시하고, 추출 결과·구간 해시·모델 source·전처리 버전·프롬프트를 함께 캐시 키로 사용한다. 문서 제목이나 경로가 임베딩 프롬프트에 들어가면 해당 값도 키에 포함해야 한다. 변경되지 않은 구간은 재사용하되 내용이 바뀐 파일을 분석하는 동안 이전 결과는 오래된 결과임을 표시하거나 정책에 따라 숨긴다.
+**Reduce what must be recalculated.** Keep size/mtime as a fast way to identify possible changes. Hash only candidate files, and use extracted-content/segment hashes, model source, preprocessing version, and prompts together as cache keys. If a document title or path is part of its embedding prompt, include it in the key too. Reuse unchanged segments, but mark old results as stale or hide them according to policy while a changed file is being analyzed.
 
-**검색과 인덱싱의 전력 예산을 분리한다.** 이름 결과는 즉시 보여주고, 의미 추론은 입력이 잠시 멈춘 뒤 시작한다. 새 입력은 대기 중인 이전 요청을 취소하고, 검색 중에는 백필보다 질의에 우선권을 준다. 백필은 AC·유휴·발열 조건을 우선하며, 새 파일도 초당 처리량 또는 분당 에너지 상한을 둔다. 대기 시간은 실측 p95를 기준으로 조정하고 이름만으로 충분한 검색의 추론 생략도 평가한다.
+**Separate power budgets for search and indexing.** Show name results immediately and start semantic inference after a short typing pause. New input cancels a previous pending request, and active searches receive priority over backfill. Prefer AC, idle, and acceptable thermal conditions for backfill, while also limiting new-file throughput per second or energy per minute. Tune delays against measured p95 latency and evaluate skipping inference when names alone are sufficient.
 
-**재시작과 대용량 파일을 견딘다.** durable 작업 큐에 파일 버전, 단계, 우선순위, 재시도 횟수, 다음 구간을 저장한다. 단일 writer가 트랜잭션으로 결과를 교체하고, 분석 도중 파일이 다시 바뀌면 오래된 작업 결과를 커밋하지 않는다. 긴 음성·영상도 일정 구간씩 처리하여 재개하고 추출 대기열의 디스크·메모리 사용량에 상한을 둔다.
+**Handle restarts and large files.** Store file version, stage, priority, retry count, and next segment in a durable job queue. A single writer should replace results transactionally and reject stale work if a file changes again during analysis. Process long audio/video in bounded, resumable sections and cap the extraction queue's disk and memory usage.
 
-**실제 컬렉션에 맞춰 검색 인덱스를 조정한다.** USearch의 후보 수·탐색 폭·exact 전환 기준을 실제 미디어와 코드 컬렉션에서 평가한다. HNSW 생성·reload 시간도 질의 지연과 별도로 기록한다. 이름 검색은 시스템 메타데이터를 재사용하되, Spotlight 미지원 위치까지 요구될 때만 작은 자체 이름 인덱스를 추가한다.
+**Tune the search index for real collections.** Evaluate USearch candidate counts, expansion, and exact-search thresholds on actual media and code collections. Record HNSW construction/reload times separately from query latency. Reuse system metadata for name search, adding a small local name index only if coverage of locations unsupported by Spotlight is required.
 
-## 후속 작업 우선순위
+## Follow-Up Priorities
 
-1. 실제 파일·앱 검색과 최근 사용 감지의 누락률·조회 지연을 측정한다. Spotlight 미지원 위치와 앱 내부 열기는 별도 해결 과제로 남긴다.
-2. FSEvents 기반 부분 갱신과 이벤트 손실 복구를 구현한다. 현재 최근 사용 알림도 전체 순회를 유발하므로 이 비용을 먼저 줄인다.
-3. USearch의 실제 컬렉션별 정확도·메모리·업데이트 비용을 측정하고 백그라운드 캐시 생성과 변경 로그를 추가한다.
-4. 현재 전체 Core ML 경로의 배치 계획·고정 참조 검증을 다른 기기와 실제 컬렉션으로 넓히고, 실제 실행 중 장치 사용·최초 준비·파일/질의당 에너지를 측정한다. `.all`이 특정 장치의 사용이나 전력 절감을 보장한다고 가정하지 않는다.
-5. 구간 캐시와 미디어의 재개 가능한 작업 큐를 추가한다. 활동 기반 우선순위와 전원 정책은 모든 백엔드에서 유지한다.
+1. Measure missed results and lookup latency for actual file/application search and recent-use detection. Locations unsupported by Spotlight and in-app file opens remain separate problems.
+2. Implement FSEvents-based incremental updates and event-loss recovery. Recent-use notifications currently trigger full walks too, so reduce that cost first.
+3. Measure USearch accuracy, memory, and update costs per actual collection, and add background cache construction and a change log.
+4. Extend current full Core ML placement-plan and fixed-reference validation to other devices and actual collections. Measure runtime device usage, initial preparation, and energy per file/query. Do not assume `.all` guarantees use of a particular device or lower power consumption.
+5. Add segment caching and a resumable media work queue. Preserve activity-based priority and power policies across all backends.
 
-## 이전 구현 검증 기록
+## Earlier Implementation Validation Records
 
-아래 수치와 모델 실행 검증은 전체 Core ML 전환 전의 구현 기록이다. 현재 빌드의 검증 결과와 혼동하지 않는다.
+The following figures and model-execution checks describe the implementation before the full Core ML migration. They should not be confused with validation of the current build.
 
-당시 실제 모델을 지정하고 `DIGUP_TEST_COREML=1 swift test`를 실행해 전체 121개 테스트가 통과했다. DigUpKit 109개, LlamaRuntime 6개, CoreMLRuntime 6개이며 모델 참조 테스트도 생략하지 않았다. 검색·활동 테스트는 이름 정규화·제외 경로·모델 없는 앱 검색·페이지 보존·스키마 마이그레이션·최근 우선순위·완료 파일 재사용·이동/삭제·정책 범위·긴 PDF 우선 완성을 검증한다. ANN 테스트는 캐시 손상·동시 게시·구간 삭제와 ID 재사용·모델 변경·종류 필터·파일별 그룹화·정확 검색과의 일치를 확인한다. `./build.sh`로 릴리스 앱과 helper를 빌드하고 로컬 서명까지 완료했다.
+At that stage, running `DIGUP_TEST_COREML=1 swift test` with actual models configured passed all 121 tests: 109 DigUpKit, six LlamaRuntime, and six CoreMLRuntime tests, without skipping model-reference tests. Search/activity tests cover name normalization, excluded paths, application search without a model, page preservation, schema migration, recent-use priority, completed-file reuse, moves/deletions, policy scope, and prioritized completion of long PDFs. ANN tests cover corrupt caches, concurrent publication, segment deletion and ID reuse, model changes, kind filters, file grouping, and agreement with exact search. `./build.sh` built the release app and helper and completed local signing.
 
-실제 `digup index-service`와 임시 DB·PDF·코드 파일, 가짜 임베딩 worker로 통합 검증했다. 최근 PDF → 최근 코드 → 나머지 PDF 순서, 전원 허용이 꺼졌을 때 최근 파일도 임베딩하지 않음, 일반 txt 제외, 재시작 후 완료 파일을 재임베딩하지 않음을 확인했다. 파일 형식 조회에 필요한 시스템 서비스 접근을 위해 이 검증은 샌드박스 밖에서 실행했다. 이는 스케줄러 검증이며 실제 모델 추론 검증은 아니다.
+Integration checks used the actual `digup index-service`, temporary databases/PDF/code files, and a fake embedding worker. They verified recent PDF → recent code → remaining PDF order; no embedding of recent files when power permission was off; exclusion of ordinary txt files; and no re-embedding of completed files after restart. These checks ran outside the sandbox to access system services needed for file-type lookup. They validate the scheduler, not actual model inference.
 
-실제 시스템의 `/System/Applications` 범위에서 Spotlight와 별도 앱 목록 조회가 모두 `Calculator.app`을 찾았다. 빌드한 앱도 별도 설정·빈 인덱스로 실행해 Calculator 결과·아이콘·미리보기와 열기 요청을 dry run으로 검증했다. 이 실행에서 이름 결과는 약 95ms, 최초 의미 검색 완료는 약 11초였으며 두 결과가 순차적으로 표시됐다. 실제 계산기를 실행하지는 않았다. 별도 임시 모델 폴더로 7개 파일을 가져와 당시 7개 자산의 크기·SHA-256 확인과 준비 완료까지 검증했다. 모든 외부 앱의 최근 사용 메타데이터 갱신과 전력 소비는 검증하지 않았다.
+Within the actual system's `/System/Applications` scope, both Spotlight and the separate application catalog found `Calculator.app`. The built app was also launched with separate settings and an empty index to verify the Calculator result, icon, preview, and open request in a dry run. Name results appeared in about 95 ms, while initial semantic search completed in about 11 seconds; the two appeared sequentially. Calculator itself was not launched. Seven files were imported into a separate temporary model folder, verifying the size and SHA-256 of the seven assets used at that stage and readiness afterward. Recent-use metadata updates from every external app and power consumption were not validated.
 
-후속 실사용 로그에서 임베딩을 얻는 데 0–14ms, 검색 단계에는 10–26초가 걸리는 지연을 발견했다. 일반 검색이 같은 Spotlight 요청을 반복 실행하고, 매 키 입력의 오래된 요청과 동기식 시스템 조회를 기다리던 문제였다. 패널과 검색 창에서 자체 키워드·의미 결과와 시스템 결과를 독립적으로 표시하고 병합하도록 수정했다. Spotlight 요청은 120ms 입력 대기 후 시작하고 이전 요청을 취소한다. 시스템 수집은 최대 300ms 후 중지하여 그때까지의 결과를 사용한다. 단일 OS 메타데이터 호출 자체의 실행 시간까지 제한하는 것은 아니다. 앱 목록은 이름을 먼저 비교해 일치한 앱만 파일 메타데이터를 조회한다.
+Later real-use logs showed embeddings taking 0–14 ms while the search stage took 10–26 seconds. Ordinary searches were repeating the same Spotlight request and waiting for stale requests from prior keystrokes and synchronous system queries. The panel and search window were changed to independently display and merge local keyword/semantic results and system results. Spotlight requests now start after a 120 ms typing pause and cancel previous requests. System collection stops after at most 300 ms and uses results gathered so far; this does not bound the duration of an individual OS metadata call itself. The application catalog compares names first and fetches file metadata only for matching applications.
 
-실제 인덱스 복사본과 별도 설정으로 release 앱을 검증했을 때 검색 단계는 2–25ms, 시스템 결과는 313–331ms였다. 모델을 새로 시작한 첫 질의는 11.9초의 임베딩 대기가 있었고 다음 프로세스들의 첫 질의는 1.1초 수준이었다. 모델 초기화 비용은 검색 큐 대기와 별도로 남는다. 같은 짧은 질의들을 worker에서 직접 반복 추론한 준비 후 5회 중앙값은 CPU+ANE 4.6ms, llama.cpp Metal 4.9ms였다(질의 벡터 캐시를 사용하지 않음). 이는 해당 기기의 작은 표본으로, 긴 입력·동시 인덱싱·전력 소비를 대표하지 않는다. `DIGUP_TEST_SPOTLIGHT=1 swift test --filter LocalSearchTests`의 10개 테스트로 취소, 수집 시간 제한, 앱 결과 보존, 실제 시스템 Spotlight 반환을 검증했다.
+Validating the release app against a copy of the actual index and separate settings measured the search stage at 2–25 ms and system results at 313–331 ms. The first query after starting a new model had an 11.9-second embedding wait; first queries in subsequent processes were around 1.1 seconds. Model initialization remains a separate cost from waiting on the search queue. For the same short queries repeatedly inferred directly in the worker, five warm calls had a median of 4.6 ms on CPU+ANE and 4.9 ms on llama.cpp Metal, without a query-vector cache. This is a small sample on that device, not representative of long inputs, concurrent indexing, or power consumption. Ten tests from `DIGUP_TEST_SPOTLIGHT=1 swift test --filter LocalSearchTests` verified cancellation, collection deadlines, preservation of application results, and actual system Spotlight responses.
 
-이전 hybrid 모델로 PDF 1개·이미지 2개·음성 1개를 임시 인덱스에 처리하고 일반 txt가 제외되는 것을 확인했다. 질의와 인덱싱의 fingerprint가 같고, llama를 강제하면 출처 불일치를 거부한다. 서비스는 불일치 시 경고와 키워드 결과를 제공하며 차가운 키워드 검색은 encoder를 시작하지 않는다. 반복 질의의 임베딩 캐시, reload 후 결과 유지, Core ML 자산이 없을 때의 키워드 검색도 확인했다.
+The earlier hybrid model processed one PDF, two images, and one audio file into a temporary index, with ordinary txt files excluded. Query and indexing fingerprints matched, and forcing llama rejected the source mismatch. On mismatch, the service provided a warning and keyword results; a cold keyword search did not start the encoder. Repeated-query embedding caching, result preservation after reload, and keyword search without Core ML assets were also verified.
 
-검색 서비스의 `/var`와 `/private/var` 경로 별칭도 같은 위치로 처리하도록 수정했다. 두 표기의 검색 폴더·제외 폴더·설정 갱신을 최신 CLI로 회귀 검증했다.
+The search service was also updated to treat `/var` and `/private/var` path aliases as the same location. Search folders, excluded folders, and settings updates using both spellings were regression-tested with the latest CLI.
