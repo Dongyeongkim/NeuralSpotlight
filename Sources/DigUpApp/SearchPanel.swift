@@ -60,7 +60,7 @@ final class SearchPanelController {
     @ObservationIgnored private var mouseMonitor: Any?
     @ObservationIgnored private var resignObserver: NSObjectProtocol?
     @ObservationIgnored private var keyWindowObserver: NSObjectProtocol?
-    @ObservationIgnored private var shownAt = Date.distantPast
+    @ObservationIgnored private var resignKeyObserver: NSObjectProtocol?
     /// Fading out: still on screen, but gone as far as everything else is concerned.
     @ObservationIgnored private var fading = false
     @ObservationIgnored private var activity: NSObjectProtocol?
@@ -99,15 +99,14 @@ final class SearchPanelController {
 
     func show() {
         let started = Date()
-        shownAt = started
+        let foreground = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"
         engine.prewarm()
         let window = self.window ?? makeWindow()
         placeWindow(window)
         refresh()
         if AppController.offscreen { return }
-        // Activate for real: a background app's main thread drops to efficiency cores (App Nap), which can make
-        // search 5× slower.
-        bringAppToFront()
+        // Take keyboard focus without activating the app or switching to its other windows' Space.
+        // The activity below keeps interactive search out of App Nap while this panel is visible.
         fading = false   // shown again while it faded out: it comes back from where it got to
         window.ignoresMouseEvents = false
         window.canHide = true
@@ -130,6 +129,8 @@ final class SearchPanelController {
         DispatchQueue.main.async {
             // The next turn of the main loop, after the window's first layout and display.
             log("panel: shown in \(ms(since: started, until: shown)), drawn by \(ms(since: started))")
+            log("panel: foreground \(foreground) → \(NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "unknown"), "
+                + "key=\(window.isKeyWindow), activeSpace=\(window.isOnActiveSpace), appActive=\(NSApp.isActive)")
         }
     }
 
@@ -310,10 +311,20 @@ final class SearchPanelController {
             let window = note.object as? NSWindow
             MainActor.assumeIsolated {
                 guard let self, let window, window !== self.window, !(window is QLPreviewPanel) else { return }
-                if Date().timeIntervalSince(self.shownAt) < 0.5 {
-                    // Activating the app can hand the key to its last window just after the panel opened: take it back.
-                    self.window?.makeKey()
-                } else {
+                self.hide()
+            }
+        }
+        // A nonactivating panel can lose focus while the app was never active, so app deactivation alone
+        // cannot detect a click back into Safari. Allow one turn for Quick Look to take the key first.
+        resignKeyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let resigned = note.object as? NSWindow
+            MainActor.assumeIsolated {
+                guard let self, resigned === self.window || resigned is QLPreviewPanel else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.isVisible, self.window?.isKeyWindow != true else { return }
+                    if let preview = NSApp.keyWindow as? QLPreviewPanel, preview.dataSource === self.window { return }
                     self.hide()
                 }
             }
@@ -324,11 +335,12 @@ final class SearchPanelController {
         for monitor in [keyMonitor, mouseMonitor].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }
         keyMonitor = nil
         mouseMonitor = nil
-        for observer in [resignObserver, keyWindowObserver].compactMap({ $0 }) {
+        for observer in [resignObserver, keyWindowObserver, resignKeyObserver].compactMap({ $0 }) {
             NotificationCenter.default.removeObserver(observer)
         }
         resignObserver = nil
         keyWindowObserver = nil
+        resignKeyObserver = nil
     }
 
     /// Keys typed in the panel, or in Quick Look while the panel is the one showing it.
@@ -448,10 +460,8 @@ final class SearchPanelController {
 
     /// Esc: hide, and give the keyboard back to the app you came from (at once: the fade doesn't hold it).
     private func dismiss() {
-        // Hiding the app gives the keyboard back at once; the panel is left out of it so that it can still fade.
-        window?.canHide = false
+        // Closing the nonactivating panel returns focus to the underlying app without hiding our other windows.
         hide()
-        NSApp.hide(nil)
     }
 
     private func flash(_ text: String) {
@@ -565,11 +575,11 @@ final class SearchPanelWindow: NSPanel, QLPreviewPanelDataSource {
     init() {
         super.init(contentRect: NSRect(x: 0, y: 0, width: SearchPanelController.width,
                                        height: SearchPanelController.fieldHeight),
-                   styleMask: [.borderless, .fullSizeContentView], backing: .buffered, defer: true)
+                   styleMask: [.borderless, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: true)
         isFloatingPanel = true
         level = .floating
         hidesOnDeactivate = false   // the controller hides it, and also tidies up
-        collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary, .ignoresCycle]
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .canJoinAllApplications, .ignoresCycle]
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true

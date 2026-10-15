@@ -4,6 +4,7 @@ As of October 15, 2026. Spotlight name/text search and application launching for
 
 ## Search Implemented in This Update
 
+- The shortcut opens a nonactivating `NSPanel` on the current Space, including other applications' full-screen spaces and Stage Manager sets. It takes keyboard focus without explicitly activating NeuralSpotlight or bringing its main window forward. A process activity keeps interactive search out of App Nap. Losing panel focus dismisses it, except when focus transfers to its Quick Look preview; Escape closes the panel without hiding other NeuralSpotlight windows.
 - File, folder, and application results are integrated into the macOS app's search panel and search window. Enter opens a file in its default app or launches an application. The existing Show in Finder action remains available.
 - File names and system-extracted text are queried through Spotlight's existing index within the selected search folders. Formats without a content extractor, such as ZIP archives and spreadsheets, can also be found by name. Folder and extension exclusions apply. Hidden files, key files, files inside application bundles, some dependency directories, and cloud files that have not been downloaded are excluded.
 - The application catalog is collected from `/Applications`, `/System/Applications`, and `~/Applications`. Collection does not descend into app bundles, and applications remain searchable without selected file folders or an embedding model. The catalog refreshes on search at most once every 60 seconds; deleted applications are immediately excluded from results.
@@ -152,6 +153,8 @@ Recent files do not bypass low-power, thermal, charger, or allowed-hours policie
 File reconciliation is independent of embedding permission. While paused or outside the indexing schedule, the app uses `index-service --sync-only` to remove deleted files and discover changes without loading or resetting the model. Deletion removes the file's segments, vectors, FTS entries, and activity records. Missing or unreadable roots are preserved because an unavailable drive is not evidence that its files were deleted. A deletion/rename sync invalidates loaded search vectors so the next semantic query reconciles the ANN cache. Visible searches rerun after file changes, and reopening the panel or returning to the search window refreshes an unchanged query too; otherwise, a deleted file could remain in the displayed results even after its database rows were removed.
 
 The native app passes `--rich-content-only --recent-first` to the helper. The CLI retains its default policy and can opt in with those flags. The schema 5→6 migration adds the activity table without recalculating existing vectors. The next crawl removes only the app's own ordinary-document index entries; those files remain searchable through Spotlight.
+
+An incomplete crawl also preserves indexed files under unreadable subfolders. Enumeration and metadata errors are recorded as inaccessible paths rather than interpreted as deletions. This matters when macOS grants different folder access to an app launched normally and a helper launched from a terminal. A permission-denied regression test verifies that existing vectors survive the failed crawl and that a real deletion is still reconciled after access is restored.
 
 ## Vector Database — USearch Implemented
 

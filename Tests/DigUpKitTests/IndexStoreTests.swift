@@ -169,6 +169,37 @@ import WinSDK
         #expect(try store.files(under: [drive.path]).count == 1)
     }
 
+    #if !os(Windows)
+    @Test func unreadableSubfolderKeepsItsIndexedVectors() throws {
+        let base = URL(fileURLWithPath: FolderSelection.realPath(folder.path))
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("files")
+        let locked = root.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let document = locked.appendingPathComponent("notes.txt")
+        try Data("Important searchable notes".utf8).write(to: document)
+        let store = try IndexStore(directory: base.appendingPathComponent("index"))
+        let options = IndexOptions()
+        let indexer = try Indexer(store: store, options: options,
+                                  makeEmbedder: { throw WorkerError.notFound("no model needed to sync") })
+        #expect(try indexer.sync([root]).added == 1)
+        let row = try #require(store.files(under: [root.path]).first)
+        try store.addSegment(file: row.id, kind: .chunk, modality: .text,
+                             text: "Important searchable notes", vector: [Float](repeating: 0.1, count: 768))
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+        let report = Crawler.crawl([root], options: options)
+        #expect(report.unreadablePaths.contains(locked.path))
+        #expect(try indexer.sync([root]).removed == 0)
+        #expect(try store.files(under: [root.path]).count == 1)
+        #expect(try store.counts().vectors == 1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path)
+        try FileManager.default.removeItem(at: document)
+        #expect(try indexer.sync([root]).removed == 1)
+        #expect(try store.counts().vectors == 0)
+    }
+    #endif
+
     @Test(arguments: [false, true])
     func deletingFilesRemovesTextVectorsActivityAndANNCandidates(code: Bool) throws {
         let base = URL(fileURLWithPath: FolderSelection.realPath(folder.path))

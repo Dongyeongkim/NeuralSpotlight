@@ -140,7 +140,7 @@ enum Launch {
 }
 
 /// Brings NeuralSpotlight to the front. Plain `NSApp.activate()` is only a request that macOS may decline while another
-/// app is in use; the panel needs real activation so App Nap doesn't slow search down.
+/// app is in use. Used for ordinary app windows; the hotkey panel takes focus without activating the app.
 func bringAppToFront() {
     (NSApp as any ForcedActivation).activate(ignoringOtherApps: true)
 }

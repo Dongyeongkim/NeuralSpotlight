@@ -12,6 +12,8 @@ public struct Candidate: Sendable {
 
 public struct CrawlReport: Sendable {
     public var candidates: [Candidate] = []
+    /// An incomplete walk must not make inaccessible files look deleted.
+    public var unreadablePaths: Set<String> = []
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
@@ -51,12 +53,24 @@ public enum Crawler {
             #else
             guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                                             errorHandler: { _, _ in true }) else { continue }
+                                             errorHandler: { url, _ in
+                                                 report.unreadablePaths.insert(FolderSelection.realPath(url.path))
+                                                 return true
+                                             }) else {
+                report.unreadablePaths.insert(FolderSelection.realPath(root.path))
+                continue
+            }
             #endif
             func visit(_ url: URL) {
-                let values = try? url.resourceValues(forKeys: Set(keys))
+                let values: URLResourceValues
+                do {
+                    values = try url.resourceValues(forKeys: Set(keys))
+                } catch {
+                    report.unreadablePaths.insert(FolderSelection.realPath(url.path))
+                    return
+                }
                 let isPackage = FileSystem.isPackage(url, values)
-                if values?.isDirectory == true, !isPackage {
+                if values.isDirectory == true, !isPackage {
                     if let reason = Rules.skipReason(forFolder: url, home: home, excluded: skips)
                         ?? (options.code ? Rules.codeSkipReason(forFolder: url) : nil) {
                         walker.skipDescendants()
@@ -85,7 +99,11 @@ public enum Crawler {
                         report.skipped["searched by Spotlight", default: 0] += 1
                         return
                     }
-                    guard let info = FileSystem.info(of: url.path), info.isRegular else {
+                    guard let info = FileSystem.info(of: url.path) else {
+                        report.unreadablePaths.insert(FolderSelection.realPath(url.path))
+                        return
+                    }
+                    guard info.isRegular else {
                         report.skipped["link or special file", default: 0] += 1
                         return
                     }

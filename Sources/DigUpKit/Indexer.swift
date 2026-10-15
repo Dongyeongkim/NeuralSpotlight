@@ -124,7 +124,10 @@ public final class Indexer {
             let vanished = roots.map { $0.standardizedFileURL.path }
                 .filter { !FileManager.default.fileExists(atPath: $0) }.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
-                && !vanished.contains(where: { row.path.hasPrefix($0) }) {
+                && !vanished.contains(where: { row.path.hasPrefix($0) })
+                && !crawl.unreadablePaths.contains(where: {
+                    row.path == $0 || row.path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/")
+                }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }
