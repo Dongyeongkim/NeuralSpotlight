@@ -169,6 +169,52 @@ import WinSDK
         #expect(try store.files(under: [drive.path]).count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func deletingFilesRemovesTextVectorsActivityAndANNCandidates(code: Bool) throws {
+        let base = URL(fileURLWithPath: FolderSelection.realPath(folder.path))
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("files")
+        let subtree = root.appendingPathComponent("nested")
+        try FileManager.default.createDirectory(at: subtree, withIntermediateDirectories: true)
+        let ext = code ? "swift" : "txt"
+        let gone = subtree.appendingPathComponent("deletedfixture.\(ext)")
+        let kept = root.appendingPathComponent("retainedfixture.\(ext)")
+        for url in [gone, kept] { try Data("let fixture = 1\n".utf8).write(to: url) }
+        var options = IndexOptions()
+        options.code = code
+        let store = try IndexStore(directory: base.appendingPathComponent("index"),
+                                   file: code ? IndexStore.codeFile : IndexStore.mainFile)
+        let indexer = try Indexer(store: store, options: options,
+                                  makeEmbedder: { throw WorkerError.notFound("deletion must not load a model") })
+        #expect(try indexer.sync([root]).added == 2)
+        let files = try store.files(under: [root.path])
+        var vector = [Float](repeating: 0, count: Vectors.dimension)
+        vector[0] = 1
+        for file in files {
+            try store.addSegment(file: file.id, kind: .chunk, modality: .text,
+                                 text: "deletionfixturecontent", vector: vector)
+            try store.finish(file.id, state: "done")
+            try store.recordUse(path: file.path, at: Date(), source: "open")
+        }
+        let searcher = try Searcher(store: store, vectorSearchMode: .approximate)
+        #expect(searcher.vectorCount == 2)
+        // Removing a directory must remove all its indexed descendants, but not its sibling.
+        try FileManager.default.removeItem(at: subtree)
+        #expect(try indexer.sync([root]).removed == 1)
+        #expect(try store.files(under: [root.path]).map(\.path) == [kept.path])
+        var activity: [String] = []
+        try store.db.query("SELECT path FROM activity") { activity.append($0.text(0)!) }
+        #expect(activity == [kept.path])
+        searcher.releaseVectors() // the app invalidates the loaded search cache on a deletion sync
+        #expect(try searcher.search("deletedfixture", queryVector: nil).isEmpty)
+        let hits = try searcher.search("", queryVector: vector, limit: 10, zGate: -.infinity)
+        #expect(hits.map(\.path) == [kept.path])
+        #expect(searcher.vectorCount == 1)
+        #expect(try Searcher(store: store, vectorSearchMode: .approximate)
+            .search("", queryVector: vector, limit: 10, zGate: -.infinity).map(\.path) == [kept.path])
+        #expect(try indexer.sync([root]).removed == 0)
+    }
+
     @Test func syncFindsTheRowsOfAFolderSpelledAnotherWay() throws {
         // The walk stores paths as the disk spells them, and on a Mac these folders are chosen spelled otherwise twice
         // over: under /var where the disk says /private/var (the temporary folder), and with a name the disk keeps

@@ -98,6 +98,8 @@ nonisolated final class Engine: @unchecked Sendable {
     let modelsDirectory: URL
     private let embeddingBackend: EmbeddingBackend
     let encoderIdleSeconds: Double
+    /// Visible searches keep their query, but must not retain results for files that disappeared.
+    @MainActor var onFilesChanged: ((Bool) -> Void)?
     private let indexQueue = DispatchQueue(label: "NeuralSpotlight.index", qos: .utility)
     private let searchQueue = DispatchQueue(label: "NeuralSpotlight.search", qos: .userInitiated)
     private let encoderQueue = DispatchQueue(label: "NeuralSpotlight.encoder", qos: .userInitiated)
@@ -108,6 +110,7 @@ nonisolated final class Engine: @unchecked Sendable {
     private var helper: Process?
     private var helperInput: FileHandle?
     private var helperStarted = Date()
+    private var helperSyncOnly = false
     private var helperOutput = Data()
     /// The folders changed while a helper ran: start a new one with them when it's gone.
     private var restartHelper = false
@@ -121,6 +124,7 @@ nonisolated final class Engine: @unchecked Sendable {
     /// When a sync was last asked for that no helper has started yet; a helper that exits before doing it is
     /// restarted.
     private var syncWantedAt: Date?
+    private var codeSyncWantedAt: Date?
     private var lastSearcherRefresh = Date.distantPast
 
     /// Code search: the code index once code has been quiet this long (a file being edited changes on every save, a
@@ -529,6 +533,8 @@ nonisolated final class Engine: @unchecked Sendable {
     ]
 
     private func requestCodeSync() {
+        notifyFilesChanged(code: true)
+        codeSyncWantedAt = Date()
         if helper != nil { send("sync code") } else { startHelper() }
     }
 
@@ -550,11 +556,13 @@ nonisolated final class Engine: @unchecked Sendable {
     }
 
     private func requestSync() {
+        notifyFilesChanged(code: false)
         syncWantedAt = Date()
         if helper != nil { send("sync") } else { startHelper() }
     }
 
-    /// Starts `digup index-service` unless one is running (or indexing is paused). It syncs first, then processes
+    /// Starts `digup index-service` unless one is running. Paused/scheduled-out runs only reconcile metadata.
+    /// It syncs first, then processes
     /// recently used rich files before bulk work when the power policy allows; it exits a minute after
     /// its last file. Before the model has downloaded it only syncs (file names become searchable) and exits.
     private func startHelper() {
@@ -562,11 +570,8 @@ nonisolated final class Engine: @unchecked Sendable {
             (self.roots, self.excluded, self.excludedTypes, self.paused || heldUntil != nil, backfillBlocker == nil)
         }
         let (codeRoots, codeExcluded) = lock.withLock { (self.codeRoots, self.codeExcluded) }
-        guard helper == nil, !paused else {
-            // Paused, or outside the set hours: the next start syncs. Launched outside them, it never started.
-            if helper == nil { update { if case .starting = $0.activity { $0.activity = .idle } } }
-            return
-        }
+        if codeRoots.isEmpty { codeSyncWantedAt = nil }
+        guard helper == nil else { return }
         guard !roots.isEmpty || !codeRoots.isEmpty || pruneWanted else {
             update { $0.activity = .idle }
             return
@@ -574,7 +579,8 @@ nonisolated final class Engine: @unchecked Sendable {
         let process = Process()
         process.executableURL = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup")
         var arguments = ["index-service", "--index", indexDirectory.path, "--rich-content-only", "--recent-first"]
-        if backfill { arguments.append("--backfill") }
+        if paused { arguments.append("--sync-only") }
+        if backfill, !paused { arguments.append("--backfill") }
         if pruneWanted { arguments.append("--prune") }
         for folder in excluded { arguments += ["--exclude", folder.path] }
         for type in types { arguments += ["--exclude-ext", type] }
@@ -613,6 +619,7 @@ nonisolated final class Engine: @unchecked Sendable {
             return
         }
         helper = process
+        helperSyncOnly = paused
         helperInput = input.fileHandleForWriting
         helperStarted = Date()
         helperOutput = Data()
@@ -671,6 +678,7 @@ nonisolated final class Engine: @unchecked Sendable {
             if int("new") > 0 { update { $0.activity = .indexing(done: 0, total: int("new")) } }
             log("sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
                 + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
+            if int("removed") + int("moved") + int("changed") > 0 { invalidateSearchResults(code: false) }
         case "indexing":
             applyCounts(event)
             update { $0.activity = .indexing(done: 0, total: int("files")) }
@@ -729,6 +737,7 @@ nonisolated final class Engine: @unchecked Sendable {
             log("indexer: reading \(int("files")) files again that NeuralSpotlight reads better now (scans' words, SVGs)")
         case "pruned":
             log("indexer: \(int("files")) files under folders no longer chosen left the index")
+            invalidateSearchResults(code: false)
         case "reindex":
             log("indexer: the model or settings changed, indexing everything again (was: \(event["from"] as? String ?? "?"))")
         case "error":
@@ -744,11 +753,16 @@ nonisolated final class Engine: @unchecked Sendable {
         func int(_ key: String) -> Int { event[key] as? Int ?? 0 }
         switch event["event"] as? String {
         case "sync":
+            if let started = event["started"] as? Double, let wanted = codeSyncWantedAt,
+               started >= wanted.timeIntervalSince1970 {
+                codeSyncWantedAt = nil
+            }
             applyCounts(event)
             // New code is read right away only when the main index has nothing waiting; else it waits its turn.
             if int("new") > 0, int("pending") == 0 { update { $0.code.indexing = .init(done: 0, total: int("new")) } }
             log("code sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
                 + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
+            if int("removed") + int("moved") + int("changed") > 0 { invalidateSearchResults(code: true) }
         case "indexing":
             applyCounts(event)
             update { $0.code.indexing = .init(done: 0, total: int("code_files")) }
@@ -776,6 +790,7 @@ nonisolated final class Engine: @unchecked Sendable {
             log("indexer: skipped \(tildePath(event["path"] as? String ?? "?")): it \(event["why"] as? String ?? "")")
         case "pruned":
             log("indexer: \(int("files")) files under code folders no longer chosen left the code index")
+            invalidateSearchResults(code: true)
         case "reindex":
             log("indexer: the model changed, the code index starts over")
         case "error":
@@ -813,6 +828,8 @@ nonisolated final class Engine: @unchecked Sendable {
     }
 
     private func helperExited(status: Int32) {
+        let resumeAfterSync = helperSyncOnly && !lock.withLock { paused || heldUntil != nil }
+        helperSyncOnly = false
         helper = nil
         helperInput = nil
         log("indexer: exited (\(status)) after \(ms(since: helperStarted))")
@@ -835,9 +852,22 @@ nonisolated final class Engine: @unchecked Sendable {
             // over and over, though, if something else is wrong.
             watchdogStops = watchdogStops.filter { Date().timeIntervalSince($0) < 600 } + [Date()]
             if watchdogStops.count <= 3 { startHelper() } else { log("indexer: stopped on files 4 times in 10 min") }
-        } else if syncWantedAt != nil, status == 0 {
+        } else if (syncWantedAt != nil || codeSyncWantedAt != nil || resumeAfterSync), status == 0 {
             // A sync asked for while it was on its way out still has to happen.
             startHelper()
+        }
+    }
+
+    private func notifyFilesChanged(code: Bool) {
+        DispatchQueue.main.async { [self] in onFilesChanged?(code) }
+    }
+
+    /// Drop stale vectors before asking the UI to search again. The next meaning search reloads from SQLite
+    /// and reconciles USearch; a hidden panel does not eagerly rebuild a large graph.
+    private func invalidateSearchResults(code: Bool) {
+        searchQueue.async { [self] in
+            (code ? codeSearcher : searcher)?.releaseVectors()
+            notifyFilesChanged(code: code)
         }
     }
 
@@ -876,8 +906,8 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
-    /// From `IndexSchedule`: outside the set hours, when indexing may run again (the helper stops after its batch, as
-    /// with Pause, and none starts till then; changes meanwhile are found by the first sync after); nil inside them.
+    /// From `IndexSchedule`: outside the set hours, when embedding may run again. The current helper stops after
+    /// its batch; subsequent file events may run metadata-only reconciliation. Nil inside the allowed hours.
     /// Pause is separate: neither undoes the other.
     func setHeldUntil(_ date: Date?) {
         lock.withLock { heldUntil = date }

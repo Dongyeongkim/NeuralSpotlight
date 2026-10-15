@@ -149,6 +149,8 @@ Progress is calculated from total and pending file counts, not completion of the
 
 Recent files do not bypass low-power, thermal, charger, or allowed-hours policies. Application names and Spotlight results remain available without a model or while processing is waiting. Activity notifications currently also request a full folder rescan; incremental updates are part of the future design below. Resuming within an audio/video file is not yet implemented either.
 
+File reconciliation is independent of embedding permission. While paused or outside the indexing schedule, the app uses `index-service --sync-only` to remove deleted files and discover changes without loading or resetting the model. Deletion removes the file's segments, vectors, FTS entries, and activity records. Missing or unreadable roots are preserved because an unavailable drive is not evidence that its files were deleted. A deletion/rename sync invalidates loaded search vectors so the next semantic query reconciles the ANN cache. Visible searches rerun after file changes, and reopening the panel or returning to the search window refreshes an unchanged query too; otherwise, a deleted file could remain in the displayed results even after its database rows were removed.
+
 The native app passes `--rich-content-only --recent-first` to the helper. The CLI retains its default policy and can opt in with those flags. The schema 5→6 migration adds the activity table without recalculating existing vectors. The next crawl removes only the app's own ordinary-document index entries; those files remain searchable through Spotlight.
 
 ## Vector Database — USearch Implemented

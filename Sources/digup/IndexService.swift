@@ -51,6 +51,7 @@ final class IndexService: @unchecked Sendable {
     private let newFilesLimit: Int
     private let linger: Double
     private let recentFirst: Bool
+    private let syncOnly: Bool
     private var activityRequested = false // under lock; checked between embedding batches
     private var modelChecked = false
 
@@ -66,7 +67,7 @@ final class IndexService: @unchecked Sendable {
     private let wake = DispatchSemaphore(value: 0)
 
     init(main: Part, code: Part?, folder: URL, model: SharedEmbedder, modelReady: @escaping () -> Bool,
-         backfill: Bool, recentFirst: Bool = false, newFilesLimit: Int, linger: Double) {
+         backfill: Bool, recentFirst: Bool = false, syncOnly: Bool = false, newFilesLimit: Int, linger: Double) {
         self.main = main
         self.code = code
         self.folder = folder
@@ -76,6 +77,7 @@ final class IndexService: @unchecked Sendable {
         self.newFilesLimit = newFilesLimit
         self.linger = linger
         self.recentFirst = recentFirst
+        self.syncOnly = syncOnly
     }
 
     private var parts: [Part] { [main] + (code.map { [$0] } ?? []) }
@@ -120,6 +122,12 @@ final class IndexService: @unchecked Sendable {
                 }
             }
             if lock.withLock({ stopRequested }) { break }
+            // File deletion/rename reconciliation must work while embedding is paused, outside its schedule,
+            // or before any model is available. Never validate/load/reset the model in a metadata-only pass.
+            if syncOnly {
+                emitCounts("idle")
+                break
+            }
             guard modelReady() else {
                 // Nothing to embed with yet; the app starts another helper once the download is done.
                 emitCounts("waiting", ["for": "model"])

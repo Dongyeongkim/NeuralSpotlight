@@ -83,12 +83,14 @@ def check_count_fields(events):
             assert event[prefix + "files"] == sum(event[prefix + name] for name in COUNTS[1:]), event
 
 
-def run_service(binary, base, backfill):
+def run_service(binary, base, backfill, sync_only=False):
     arguments = [str(binary), "index-service", str(base / "files"),
                  "--code-root", str(base / "code"), "--index", str(base / "index"),
                  "--rich-content-only", "--recent-first", "--linger", "0"]
     if backfill:
         arguments.append("--backfill")
+    if sync_only:
+        arguments.append("--sync-only")
     environment = dict(os.environ, DIGUP_WORKER_DIR=str(base / "worker"))
     # A file avoids blocking on stderr if an extractor writes diagnostics.
     with (base / "stderr.log").open("w+") as stderr:
@@ -186,7 +188,25 @@ def main():
 
         repeated = run_service(binary, base, backfill=True)
         assert not any(event["event"] in ("file", "rest") for event in repeated), repeated
+
+        # A paused app still reconciles deletions in both indexes without invoking/resetting a model.
+        # New files remain pending even if --backfill was accidentally supplied with --sync-only.
+        (base / "files" / "recent-0.pdf").unlink()
+        (base / "code" / "recent.swift").unlink()
+        write_pdf(base / "files" / "new-while-paused.pdf")
+        (base / "code" / "new-while-paused.swift").write_text("let queued = true\n")
+        # The worker is deliberately unavailable: metadata-only work must not need it.
+        (base / "worker" / "digup_worker.py").unlink()
+        reconciled = run_service(binary, base, backfill=True, sync_only=True)
+        assert not any(event["event"] in ("file", "rest", "indexing", "reindex", "waiting")
+                       for event in reconciled), reconciled
+        syncs = [event for event in reconciled if event["event"] == "sync"]
+        assert len(syncs) == 2 and all(event["removed"] == 1 for event in syncs), syncs
+        idle = next(event for event in reconciled if event["event"] == "idle")
+        assert (idle["files"], idle["searchable"], idle["pending"]) == (15, 13, 1), idle
+        assert (idle["code_files"], idle["code_searchable"], idle["code_pending"]) == (3, 1, 1), idle
     print("PASS: authoritative main/code counts during sync, recent batches, bulk work, long PDFs, and completion")
+    print("PASS: metadata-only deletion reconciliation in both indexes, without a worker or embedding")
 
 
 if __name__ == "__main__":

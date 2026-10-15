@@ -27,6 +27,7 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
             search.filter = kind
             search.query = query
         }
+        search.refresh()
         app.present(window)
         if !AppController.offscreen { window.makeFirstResponder(search.field) }
         installKeyMonitor()
@@ -69,6 +70,10 @@ final class SearchWindowController: NSObject, NSWindowDelegate {
         window?.contentView = nil
         window = nil
         app.windowClosed()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        search.refresh()
     }
 
     func snapshot(to url: URL) throws {
@@ -271,6 +276,14 @@ final class SearchModel {
         let index = selection.flatMap { ids.firstIndex(of: $0) } ?? -1
         selection = ids[max(0, min(ids.count - 1, index + step))]
         navigated = true
+    }
+
+    func refresh() {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        results = .empty
+        counts = [:]
+        selection = nil
+        run()
     }
 
     private func run() {

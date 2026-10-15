@@ -60,6 +60,11 @@ final class AppController {
     func start(showWindow: Bool = false) {
         panel = SearchPanelController(app: self)
         searchWindow = SearchWindowController(app: self)
+        engine.onFilesChanged = { [weak self] code in
+            guard let self else { return }
+            if panel.isVisible, panel.isCode == code { panel.refresh() }
+            if searchWindow.isVisible, searchWindow.search.isCode == code { searchWindow.search.refresh() }
+        }
         settingsWindow = SettingsWindowController(app: self)
         statusMenu = StatusMenuController(model: model)
         statusMenu.onSearch = { [weak self] in self?.panel.show() }

@@ -23,7 +23,7 @@ let usage = """
       digup eval <queries.json> [-n 10]       recall of known answers (see evals/; "code: …" queries search code)
       digup index-service <folder>... [--code-root DIR]... [--code-exclude DIR]... [--backfill] [--prune]
                           [--memory-limit MB] [--time-limit S]
-                          [--rich-content-only] [--recent-first]
+                          [--rich-content-only] [--recent-first] [--sync-only]
                                               the app's indexing helper (JSON lines; see IndexService); it stops
                                               on a file whose reading passes the limits (see Watchdog)
       digup worker [--text-only]              the model as a process (JSON lines; the app's query encoder)
@@ -429,7 +429,7 @@ func status(_ args: Arguments) throws {
 
 /// The app's indexing helper: sync + index on request, JSON events out (IndexService.swift).
 func indexService(_ args: Arguments) throws -> Int32 {
-    try EmbeddingRuntime.requireSupport()
+    if !args.flags.contains("--sync-only") { try EmbeddingRuntime.requireSupport() }
     // One model for both indexes, started when the first file needs it (`SharedEmbedder`).
     let model = SharedEmbedder {
         try makeEmbedder(textOnly: false, log: args.indexFolder.appendingPathComponent("worker.log"), qos: .utility)
@@ -466,6 +466,7 @@ func indexService(_ args: Arguments) throws -> Int32 {
                                modelReady: { EmbeddingRuntime.ready },
                                backfill: args.flags.contains("--backfill"),
                                recentFirst: args.flags.contains("--recent-first"),
+                               syncOnly: args.flags.contains("--sync-only"),
                                newFilesLimit: args.values["--new-limit"].flatMap(Int.init) ?? 50,
                                linger: args.values["--linger"].flatMap(Double.init) ?? 60)
     return service.serve()

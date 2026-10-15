@@ -103,6 +103,7 @@ final class SearchPanelController {
         engine.prewarm()
         let window = self.window ?? makeWindow()
         placeWindow(window)
+        refresh()
         if AppController.offscreen { return }
         // Activate for real: a background app's main thread drops to efficiency cores (App Nap), which can make
         // search 5× slower.
@@ -159,6 +160,14 @@ final class SearchPanelController {
     }
 
     // MARK: Searching
+
+    /// Reopening the panel or changing files must rerun an unchanged query too.
+    func refresh() {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        results = .empty
+        selection = nil
+        queryChanged()
+    }
 
     private func queryChanged() {
         generation += 1
