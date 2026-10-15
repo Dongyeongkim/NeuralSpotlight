@@ -471,7 +471,9 @@ public final class Indexer {
                 prepared.payload = .code(try CodeExtractor.read(url, options: options))
             }
         } catch let error as ExtractError {
-            if case .leftOut = error {
+            if case .unsupported = error {
+                prepared.outcomes[0] = Outcome(state: "unsupported", detail: "\(error)")
+            } else if case .leftOut = error {
                 prepared.outcomes[0] = Outcome(state: "skipped", detail: "\(error)")
             } else {
                 for slot in batch.indices where prepared.outcomes[slot] == nil {

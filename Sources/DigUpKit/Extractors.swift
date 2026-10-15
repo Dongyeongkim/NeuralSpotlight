@@ -5,6 +5,7 @@ enum ExtractError: Error, CustomStringConvertible {
     case tooSmall(Int, Int)
     case locked
     case empty(String)
+    case unsupported(String)
     /// Not for the index after all, once read (code that a program made, or that holds a private key).
     case leftOut(String)
 
@@ -14,6 +15,7 @@ enum ExtractError: Error, CustomStringConvertible {
         case .tooSmall(let width, let height): "small image \(width)×\(height)"
         case .locked: "password-protected"
         case .empty(let why): why
+        case .unsupported(let why): "unsupported: \(why)"
         case .leftOut(let why): why
         }
     }

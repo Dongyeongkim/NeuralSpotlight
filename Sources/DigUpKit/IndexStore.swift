@@ -128,7 +128,7 @@ public final class IndexStore {
                 mtime REAL NOT NULL,
                 inode INTEGER NOT NULL,
                 device INTEGER NOT NULL,
-                state TEXT NOT NULL DEFAULT 'pending',   -- pending | done | partial | skipped | failed
+                state TEXT NOT NULL DEFAULT 'pending',   -- pending | done | partial | skipped | unsupported | failed
                 detail TEXT,                              -- why skipped/failed, or how far a long file has been read
                 info TEXT,                                -- JSON: pixels, pages, duration, date taken; read_to/read_end
                 indexed_at REAL
@@ -481,6 +481,17 @@ public final class IndexStore {
                          [.text(ExtractError.tooSmall(0, 0).description)]) { files.insert($0.int(0)) }
             flags.append("pictures_drawn")
         }
+        #if canImport(AVFoundation)
+        // Older releases attempted to decode DRM movies and reported them as ordinary failures. Recheck
+        // only those decoder failures once; protection is verified by AVFoundation before assigning a state.
+        if try meta("protected_media_checked") == nil {
+            try db.query("""
+                SELECT id FROM files WHERE kind IN ('video', 'audio') AND state = 'failed'
+                    AND detail LIKE '%AVFoundationErrorDomain Code=-11821%'
+                """) { files.insert($0.int(0)) }
+            flags.append("protected_media_checked")
+        }
+        #endif
         guard !flags.isEmpty else { return 0 }
         try db.transaction {
             for file in files { try requeue(file) }

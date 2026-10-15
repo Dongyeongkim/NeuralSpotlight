@@ -460,6 +460,7 @@ private struct IndexProgress: View {
         if status.pending > 0 { text += " · \(status.pending.formatted()) waiting" }
         if status.failed > 0 { text += " · \(status.failed.formatted()) couldn't be indexed" }
         if status.skipped > 0 { text += " · \(status.skipped.formatted()) skipped" }
+        if status.unsupported > 0 { text += " · \(status.unsupported.formatted()) unsupported" }
         if status.unfinished > 0 {
             text += " · \(status.unfinished.formatted()) long \(status.unfinished == 1 ? "file" : "files") to finish"
         }
@@ -527,6 +528,7 @@ private struct FolderStatusRow: View {
          summary.unfinished > 0
             ? "\(summary.unfinished.formatted()) long \(summary.unfinished == 1 ? "file" : "files") to finish" : nil,
          summary.skipped > 0 ? "\(summary.skipped.formatted()) skipped" : nil,
+         summary.unsupported > 0 ? "\(summary.unsupported.formatted()) unsupported" : nil,
          summary.failed > 0 ? "\(summary.failed.formatted()) couldn't be read" : nil].compactMap { $0 }
             .joined(separator: " · ")
     }

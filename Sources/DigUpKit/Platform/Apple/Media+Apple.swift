@@ -12,6 +12,7 @@ extension AudioExtractor {
     static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, to folder: URL) async throws
         -> (pieces: [MediaPiece], duration: Double) {
         let asset = AVURLAsset(url: url)
+        try await MediaInfo.checkContentProtection(asset)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { return ([], 0) }
         let duration = try await asset.load(.duration).seconds
         let reader = try AVAssetReader(asset: asset)
@@ -63,6 +64,7 @@ extension VideoExtractor {
     static func keyframes(of url: URL, every interval: Double, maxPixel: Int, maxFrames: Int = 1200, to folder: URL)
         async throws -> (frames: [MediaPiece], duration: Double, hasAudio: Bool) {
         let asset = AVURLAsset(url: url)
+        try await MediaInfo.checkContentProtection(asset)
         let duration = try await asset.load(.duration).seconds
         let hasAudio = !(try await asset.loadTracks(withMediaType: .audio)).isEmpty
         guard duration.isFinite, duration > 0, !(try await asset.loadTracks(withMediaType: .video)).isEmpty
@@ -126,6 +128,13 @@ extension VideoExtractor {
 }
 
 extension MediaInfo {
+    /// Playback entitlement does not permit extracting protected tracks for embeddings.
+    static func checkContentProtection(_ asset: AVAsset) async throws {
+        if try await asset.load(.hasProtectedContent) {
+            throw ExtractError.unsupported("Protected media (DRM) cannot be indexed for content search")
+        }
+    }
+
     /// Duration from the file itself, for when Spotlight hasn't indexed it yet.
     static func duration(of url: URL) -> Double? {
         let seconds = try? runBlocking { try await AVURLAsset(url: url).load(.duration).seconds }

@@ -28,6 +28,7 @@ nonisolated struct EngineStatus: Sendable, Equatable {
     var searchable = 0   // done or partial
     var pending = 0      // waiting to be embedded
     var failed = 0       // attempted but couldn't be indexed
+    var unsupported = 0  // protected media or another unsupported content format
     var skipped = 0      // deliberately left out of the meaning index
     var unfinished = 0   // long files with pages or chunks still to read (the backfill's rules hold them up too)
     var vectors = 0
@@ -52,6 +53,7 @@ nonisolated struct EngineStatus: Sendable, Equatable {
         var pending = 0
         var failed = 0
         var skipped = 0
+        var unsupported = 0
         var vectors = 0
         /// Files being read into the code index (`done` of `total`), or nil.
         var indexing: Progress?
@@ -418,7 +420,7 @@ nonisolated final class Engine: @unchecked Sendable {
     }
 
     private func applyCode(_ counts: IndexStore.Counts) {
-        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
+        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0, unsupported = 0
         for states in counts.byKindAndState.values {
             for (state, count) in states {
                 files += count
@@ -426,6 +428,7 @@ nonisolated final class Engine: @unchecked Sendable {
                 if state == "pending" { pending += count }
                 if state == "failed" { failed += count }
                 if state == "skipped" { skipped += count }
+                if state == "unsupported" { unsupported += count }
             }
         }
         update {
@@ -434,12 +437,13 @@ nonisolated final class Engine: @unchecked Sendable {
             $0.code.pending = pending
             $0.code.failed = failed
             $0.code.skipped = skipped
+            $0.code.unsupported = unsupported
             $0.code.vectors = counts.vectors
         }
     }
 
     private func apply(_ counts: IndexStore.Counts) {
-        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
+        var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0, unsupported = 0
         for states in counts.byKindAndState.values {
             for (state, count) in states {
                 files += count
@@ -447,6 +451,7 @@ nonisolated final class Engine: @unchecked Sendable {
                 if state == "pending" { pending += count }
                 if state == "failed" { failed += count }
                 if state == "skipped" { skipped += count }
+                if state == "unsupported" { unsupported += count }
             }
         }
         update {
@@ -455,6 +460,7 @@ nonisolated final class Engine: @unchecked Sendable {
             $0.pending = pending
             $0.failed = failed
             $0.skipped = skipped
+            $0.unsupported = unsupported
             $0.vectors = counts.vectors
             $0.unfinished = counts.unfinished
         }
@@ -788,6 +794,7 @@ nonisolated final class Engine: @unchecked Sendable {
                 $0.pending = event["pending"] as? Int ?? 0
                 $0.failed = event["failed"] as? Int ?? 0
                 $0.skipped = event["skipped"] as? Int ?? 0
+                $0.unsupported = event["unsupported"] as? Int ?? 0
                 $0.vectors = event["vectors"] as? Int ?? 0
                 $0.unfinished = event["unfinished"] as? Int ?? 0
             }
@@ -799,6 +806,7 @@ nonisolated final class Engine: @unchecked Sendable {
                 $0.code.pending = event["code_pending"] as? Int ?? 0
                 $0.code.failed = event["code_failed"] as? Int ?? 0
                 $0.code.skipped = event["code_skipped"] as? Int ?? 0
+                $0.code.unsupported = event["code_unsupported"] as? Int ?? 0
                 $0.code.vectors = event["code_vectors"] as? Int ?? 0
             }
         }
@@ -991,7 +999,7 @@ nonisolated final class Engine: @unchecked Sendable {
         let path: String
         var missing = false
         var unreadable = false
-        var files = 0, indexed = 0, pending = 0, failed = 0, skipped = 0
+        var files = 0, indexed = 0, pending = 0, failed = 0, skipped = 0, unsupported = 0
         var unfinished = 0   // long files searchable but still being read (counted in `indexed` too)
         var kinds: [FileKind: Int] = [:]
         var id: String { path }
@@ -1016,6 +1024,7 @@ nonisolated final class Engine: @unchecked Sendable {
                             summary.unfinished += 1
                         case "pending": summary.pending += 1
                         case "failed": summary.failed += 1
+                        case "unsupported": summary.unsupported += 1
                         default: summary.skipped += 1
                         }
                     }

@@ -373,7 +373,7 @@ final class IndexService: @unchecked Sendable {
         for part in parts {
             guard let counts = try? part.store.counts() else { continue }
             let prefix = part.code ? "code_" : ""
-            var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0
+            var files = 0, searchable = 0, pending = 0, failed = 0, skipped = 0, unsupported = 0
             for states in counts.byKindAndState.values {
                 for (state, count) in states {
                     files += count
@@ -381,6 +381,7 @@ final class IndexService: @unchecked Sendable {
                     if state == "pending" { pending += count }
                     if state == "failed" { failed += count }
                     if state == "skipped" { skipped += count }
+                    if state == "unsupported" { unsupported += count }
                 }
             }
             fields[prefix + "files"] = files
@@ -388,6 +389,7 @@ final class IndexService: @unchecked Sendable {
             fields[prefix + "pending"] = pending
             fields[prefix + "failed"] = failed
             fields[prefix + "skipped"] = skipped
+            fields[prefix + "unsupported"] = unsupported
             fields[prefix + "vectors"] = counts.vectors
             if !part.code { fields["unfinished"] = counts.unfinished }   // long files with pages or chunks left to read
         }

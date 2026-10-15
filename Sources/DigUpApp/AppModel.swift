@@ -56,7 +56,7 @@ final class AppModel {
                 if let reason = status.waitingFor { return "\(rest) · \(reason)" }
             }
             return "\(status.searchable.formatted()) \(status.searchable == 1 ? "file" : "files") indexed"
-                + issuesSummary(failed: status.failed, skipped: status.skipped)
+                + issuesSummary(failed: status.failed, skipped: status.skipped, unsupported: status.unsupported)
                 + (status.paused ? " · paused" : "")
         }
     }
@@ -106,7 +106,7 @@ final class AppModel {
             return files + " waiting · read after your other files"
         }
         return "\(code.searchable.formatted()) code \(code.searchable == 1 ? "file" : "files") indexed" + waiting
-            + issuesSummary(failed: code.failed, skipped: code.skipped)
+            + issuesSummary(failed: code.failed, skipped: code.skipped, unsupported: code.unsupported)
     }
 
     /// A few words for the search bar while results may be incomplete: "Indexing 42%", "Downloading model · 42%".
@@ -152,8 +152,9 @@ final class AppModel {
         return "\(label) \(percent)% · \(progress.processed.formatted()) of \(progress.files.formatted()) processed"
     }
 
-    private func issuesSummary(failed: Int, skipped: Int) -> String {
+    private func issuesSummary(failed: Int, skipped: Int, unsupported: Int) -> String {
         (failed > 0 ? " · \(failed.formatted()) couldn't be indexed" : "")
             + (skipped > 0 ? " · \(skipped.formatted()) skipped" : "")
+            + (unsupported > 0 ? " · \(unsupported.formatted()) unsupported" : "")
     }
 }

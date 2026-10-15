@@ -63,6 +63,35 @@ import WinSDK
     }
 
     #if canImport(AppKit)
+    @Test func oldMediaDecodeFailuresAreRecheckedOnceWithoutTouchingOtherFiles() throws {
+        let store = try IndexStore(directory: folder)
+        func add(_ name: String, kind: FileKind, inode: UInt64, state: String, detail: String?) throws -> Int64 {
+            let id = try store.insert(Candidate(path: "/a/\(name)", kind: kind, size: 10, mtime: 1,
+                                                inode: inode, device: 1))
+            try store.finish(id, state: state, detail: detail)
+            return id
+        }
+        let decoderError = "Error Domain=AVFoundationErrorDomain Code=-11821 Cannot Decode"
+        let movie = try add("protected.m4v", kind: .video, inode: 1, state: "failed", detail: decoderError)
+        _ = try add("broken.pdf", kind: .pdf, inode: 2, state: "failed", detail: "unreadable: can't open PDF")
+        _ = try add("slow.mov", kind: .video, inode: 3, state: "failed", detail: "It took too long to read")
+        _ = try add("ready.mp4", kind: .video, inode: 4, state: "done", detail: nil)
+
+        #expect(try store.readAgainOnce() == 1)
+        #expect(try store.pending(limit: nil).map(\.id) == [movie])
+        // Classification happens after checking the actual asset, not by guessing from the decoder error.
+        try store.finish(movie, state: "unsupported", detail: "unsupported: Protected media (DRM)")
+        #expect(try store.readAgainOnce() == 0)
+        #expect(try store.pendingCount() == 0)
+        let counts = try store.counts().byKindAndState
+        #expect(counts["video"]?["unsupported"] == 1)
+        #expect(counts["video"]?["failed"] == 1)
+        #expect(counts["video"]?["done"] == 1)
+        #expect(counts["pdf"]?["failed"] == 1)
+        let searcher = try Searcher(store: store)
+        #expect(try searcher.search("protected", queryVector: nil).contains { $0.path == "/a/protected.m4v" })
+    }
+
     @Test func picturesThatCouldntBeReadAreReadOnceMore() throws {
         // An SVG skipped by an older DigUp as "small image 0×0" (ImageIO couldn't open it): AppKit draws it now.
         let store = try IndexStore(directory: folder)
