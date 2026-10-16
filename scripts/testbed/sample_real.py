@@ -6,7 +6,7 @@ import os, random, re, subprocess, sys
 HOME = os.path.expanduser("~")
 OUT = os.path.join(sys.argv[1], "real")
 ROOTS = [f"{HOME}/{d}" for d in ("Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music")]
-SKIP = re.compile(r"/(node_modules|\.git|\.venv|venv|site-packages|build|DerivedData|Pods)/|\.noindex/|\.photoslibrary/|\.app/|/\.[^/]+/|DigUpTestbed/")
+SKIP = re.compile(r"/(node_modules|\.git|\.venv|venv|site-packages|build|DerivedData|Pods)/|\.noindex/|\.photoslibrary/|\.app/|/\.[^/]+/|NeuralSpotlightTestbed/")
 rng = random.Random(7)
 
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>DigUp Settings</title>
+  <title>NeuralSpotlight Settings</title>
   <link rel="stylesheet" href="setup.css">
   <link rel="stylesheet" href="settings.css">
 </head>
@@ -18,14 +18,14 @@
       <label class="option" id="login-option" hidden>
         <input type="checkbox" id="login">
         <span class="text">
-          <span class="name">Open DigUp at login</span>
-          <span class="info">DigUp lives in the tray and keeps your folders indexed.</span>
+          <span class="name">Open NeuralSpotlight at login</span>
+          <span class="info">NeuralSpotlight lives in the tray and keeps your folders indexed.</span>
         </span>
       </label>
 
       <div class="option" id="tray-click-option" hidden>
         <span class="text">
-          <span class="name">Clicking DigUp's tray icon</span>
+          <span class="name">Clicking NeuralSpotlight's tray icon</span>
           <label class="choice"><input type="radio" name="tray-click" value="window"> Opens the window</label>
           <label class="choice"><input type="radio" name="tray-click" value="panel"> Shows the search panel</label>
           <span class="info">Right-click it for the menu.</span>
@@ -37,7 +37,7 @@
         <span class="text">
           <span class="name">Center the search panel</span>
           <span class="info">This desktop decides where new windows open, so the panel opens where it puts them.
-            Centered, it opens where it does on a Mac, but DigUp then keeps a transparent window over the whole screen:
+            Centered, it opens where it does on a Mac, but NeuralSpotlight then keeps a transparent window over the whole screen:
             about 50 MB more memory on a 1080p screen (up to 200 MB on a 4K one), and more processor time while you type
             on computers without graphics acceleration.</span>
         </span>
@@ -84,7 +84,7 @@
 
       <h3>Skip these file types</h3>
       <input class="field" id="types" type="text" placeholder="e.g. heic, txt" spellcheck="false" autocomplete="off">
-      <p class="note">DigUp reads pictures, PDFs, documents (txt, md, rtf, docx, odt, html), audio and video. Keys,
+      <p class="note">NeuralSpotlight reads pictures, PDFs, documents (txt, md, rtf, docx, odt, html), audio and video. Keys,
         certificates and password files are never read, nor are hidden folders.</p>
 
       <label class="option hours-option">
@@ -100,7 +100,7 @@
     </section>
 
     <section class="tab" id="code" role="tabpanel" hidden>
-      <p class="intro">DigUp can find code by what it does. Type “code:” in the search panel and say what the code does,
+      <p class="intro">NeuralSpotlight can find code by what it does. Type “code:” in the search panel and say what the code does,
         or pick Code in the window. Results open in your editor at the line.</p>
       <div class="card status-card" id="code-status" hidden>
         <div class="status-text">
@@ -115,7 +115,7 @@
 
       <h3>Open code in</h3>
       <select class="field" id="code-editor"></select>
-      <p class="note">DigUp reads what git keeps in these folders: source, configuration, a repository's docs and
+      <p class="note">NeuralSpotlight reads what git keeps in these folders: source, configuration, a repository's docs and
         notebooks. It leaves out what git ignores, dependencies and build output, data files, keys and password files.
         Code gets an index of its own and shows up only when you search for code.</p>
 
@@ -142,7 +142,7 @@
         <div class="fact"><span>Location</span><button class="path-button" id="index-path"></button></div>
       </div>
       <h3>Privacy</h3>
-      <p class="privacy-text">DigUp reads the folders you choose and keeps what it learns in its index, on this
+      <p class="privacy-text">NeuralSpotlight reads the folders you choose and keeps what it learns in its index, on this
         computer. It goes online only to download its model, once, and to check for updates (General), which sends nothing
         about your files.</p>
       <p class="note" id="version"></p>

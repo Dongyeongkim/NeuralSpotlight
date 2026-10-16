@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds DigUp's Windows installer: the Tauri shell (shell/) with DigUp's helper, PDFium, the Swift and C++
+# Builds NeuralSpotlight's Windows installer: the Tauri shell (shell/) with NeuralSpotlight's helper, PDFium, the Swift and C++
 # runtimes and ffmpeg in its helper folder, as an NSIS installer that installs for the current user (no admin prompt).
 # Semantic embedding requires an explicitly provisioned external worker; Core ML is macOS only.
 # Run in Git for Windows' bash after scripts/fetch-vendor.sh. Needs Swift, Rust, Node, and an LGPL ffmpeg 8.1+ with its
@@ -10,9 +10,9 @@ cd "$(dirname "$0")/.."
 FFMPEG=${FFMPEG:?set FFMPEG to the bin folder of an LGPL ffmpeg build (ffmpeg.exe, ffprobe.exe and their DLLs)}
 TAURI_CLI=2.12.2
 
-swift build -c release --product digup
+swift build -c release --product neuralspotlight
 
-# What the installer puts beside DigUp.exe, in helper\ ("DigUp.exe" and "digup.exe" can't share a folder): the helper
+# What the installer puts beside NeuralSpotlight.exe, in helper\ ("NeuralSpotlight.exe" and "neuralspotlight.exe" can't share a folder): the helper
 # finds the DLLs and ffmpeg in its own folder. The C++ runtime goes with them, so nothing needs
 # installing first; the shell itself links its C runtime statically (.cargo/config.toml).
 swift_root=$(cd "$(dirname "$(command -v swift)")/../../../.." && pwd)   # …/Swift from …/Swift/Toolchains/*/usr/bin
@@ -21,7 +21,7 @@ crt=$(ls -d "$(cygpath "$VCToolsRedistDir")"x64/Microsoft.VC*.CRT | tail -1)   #
 helper=shell/src-tauri/helper
 rm -rf "$helper"
 mkdir -p "$helper"
-cp .build/release/digup.exe Vendor/pdfium/bin/pdfium.dll "$helper/"
+cp .build/release/neuralspotlight.exe Vendor/pdfium/bin/pdfium.dll "$helper/"
 cp "$swift_runtime"/*.dll "$helper/"
 cp "$crt"/*.dll "$helper/"   # over the Swift runtime's copies of the same: the newer C++ runtime
 cp "$FFMPEG"/ffmpeg.exe "$FFMPEG"/ffprobe.exe "$FFMPEG"/*.dll "$helper/"

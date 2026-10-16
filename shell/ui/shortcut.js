@@ -1,4 +1,4 @@
-// Recording a new shortcut for the panel where DigUp grabs it itself (Windows, X11): Change Shortcut… in Settings and
+// Recording a new shortcut for the panel where NeuralSpotlight grabs it itself (Windows, X11): Change Shortcut… in Settings and
 // in setup. The current one is let go meanwhile, so that pressing it reaches the page instead of opening the panel.
 "use strict";
 

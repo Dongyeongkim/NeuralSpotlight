@@ -11,7 +11,7 @@ pub fn open_at(path: &str, page: Option<u32>, seconds: Option<f64>) -> bool {
     match crate::editors::start(&program, &args) {
         Ok(()) => true,
         Err(error) => {
-            eprintln!("digup-shell: {} didn't start: {error}", program.display());
+            eprintln!("neuralspotlight-shell: {} didn't start: {error}", program.display());
             false
         }
     }
@@ -74,7 +74,7 @@ fn default_app(path: &str) -> Option<PathBuf> {
 
 #[cfg(not(any(target_os = "linux", windows)))]
 fn default_app(_: &str) -> Option<PathBuf> {
-    None   // the shell is only tried out on a Mac, where the DigUp app opens at the page or moment itself
+    None   // the shell is only tried out on a Mac, where the NeuralSpotlight app opens at the page or moment itself
 }
 
 #[cfg(test)]

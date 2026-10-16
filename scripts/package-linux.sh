@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds DigUp for Linux as a .deb and an AppImage: the Tauri shell (shell/), helper, PDFium and ffmpeg.
+# Builds NeuralSpotlight for Linux as a .deb and an AppImage: the Tauri shell (shell/), helper, PDFium and ffmpeg.
 # Semantic embedding requires an explicitly provisioned external worker; Core ML is macOS only.
 # Run after scripts/fetch-vendor.sh. Needs Swift, Rust, Tauri's CLI (`cargo install tauri-cli --version "^2"`, else Node runs it from
 # npm), patchelf, and what scripts/build-ffmpeg.sh needs (it builds the small ffmpeg the packages carry):
@@ -16,15 +16,15 @@ for library in _CFURLSessionInterface curl CoreFoundation _FoundationICU Foundat
     swift_StringProcessing swift_RegexParser swiftDispatch dispatch BlocksRuntime swiftCore; do
   late+=(-Xlinker "-l$library")
 done
-swift build -c release --product digup --static-swift-stdlib --scratch-path .build/static "${late[@]}"
+swift build -c release --product neuralspotlight --static-swift-stdlib --scratch-path .build/static "${late[@]}"
 
 # What the packages carry beside the shell (shell/src-tauri/helper): the helper finds PDFium and ffmpeg
 # in its own folder, and each library finds the others there ($ORIGIN, not the build's folders).
 helper=shell/src-tauri/helper
 rm -rf "$helper"
 mkdir -p "$helper"
-cp .build/static/release/digup Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$helper/"
-for file in "$helper"/digup "$helper"/*.so*; do
+cp .build/static/release/neuralspotlight Vendor/pdfium/lib/libpdfium.so Vendor/ffmpeg/bin/ffmpeg Vendor/ffmpeg/bin/ffprobe "$helper/"
+for file in "$helper"/neuralspotlight "$helper"/*.so*; do
   patchelf --set-rpath '$ORIGIN' "$file"
 done
 
@@ -48,7 +48,7 @@ rm -rf shell/src-tauri/target/release/bundle/deb shell/src-tauri/target/release/
   --config "{\"bundle\":{\"resources\":{\"helper/\":\"helper/\"}$signing}}")
 
 # Packed again with xz (Tauri's gzip makes it 51 MB, xz 32). Its name stays "dig-up" (Tauri's spelling of the product's
-# name): Debian and Ubuntu already have a "digup" (a digest updating tool), which would replace DigUp at the next update.
+# name): Debian and Ubuntu already have a "neuralspotlight" (a digest updating tool), which would replace NeuralSpotlight at the next update.
 deb=$(ls shell/src-tauri/target/release/bundle/deb/*.deb)
 repack=$(mktemp -d)
 chmod 755 "$repack"   # the package's root: mktemp's 700 would ship as /'s mode

@@ -199,7 +199,7 @@ mod tests {
     #[test]
     fn found_on_path_and_chosen() {
         use std::os::unix::fs::PermissionsExt;
-        let folder = std::env::temp_dir().join(format!("digup-editors-{}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("neuralspotlight-editors-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         for name in ["subl", "codium"] {
             let program = folder.join(name);
@@ -223,7 +223,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn runs_a_cmd_editor() {
-        let folder = std::env::temp_dir().join(format!("digup editors {}", std::process::id()));
+        let folder = std::env::temp_dir().join(format!("neuralspotlight editors {}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
         let program = folder.join("code.cmd");
         let said = folder.join("said.txt");

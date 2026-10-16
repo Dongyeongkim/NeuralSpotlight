@@ -1,8 +1,8 @@
-// DigUp's window on Windows and Linux (tried out on the Mac first), for the searches the panel is too small for: kind
+// NeuralSpotlight's window on Windows and Linux (tried out on the Mac first), for the searches the panel is too small for: kind
 // filters with what the query found of each kind, the results as a grid of pictures (code as a list), the selected
 // one in a preview pane with why it matched, and a status bar with indexing. Before a search it shows the home:
-// examples to try, what's indexed, the shortcut. The Mac app's search window (Sources/DigUpApp/SearchWindow.swift) is
-// the reference; the helper (`digup search-service`) does the work, and results.js has what a result says.
+// examples to try, what's indexed, the shortcut. The Mac app's search window (Sources/NeuralSpotlightApp/SearchWindow.swift) is
+// the reference; the helper (`neuralspotlight search-service`) does the work, and results.js has what a result says.
 "use strict";
 
 const TYPING_PAUSE = 120;   // ms after the last keystroke until the search runs (the query was embedded meanwhile)
@@ -465,7 +465,7 @@ function about() {
     const line = element("div", "line");
     const caps = element("span", "keycaps");
     for (const key of keysOf(state.info.hotkey)) caps.append(element("span", "keycap", key));
-    line.append(caps, element("span", "", "opens DigUp from any app"));
+    line.append(caps, element("span", "", "opens NeuralSpotlight from any app"));
     box.append(line);
   }
   return box;
@@ -503,7 +503,7 @@ function chooseFolders() {
   const button = element("button", "button primary", "Choose Folders…");
   button.onclick = () => invoke("choose_folders").catch(failed);
   return centered(brandMark(), element("h2", "", "Choose folders to search"),
-                  element("p", "", "DigUp only looks where you tell it to."), button);
+                  element("p", "", "NeuralSpotlight only looks where you tell it to."), button);
 }
 
 function nothingFound() {
@@ -524,7 +524,7 @@ function codeHintOrOff() {
     choose.onclick = () => invoke("choose_code_folders").catch(failed);
     actions.append(choose);
     return centered(icon, element("h3", "", "Code search is off"),
-                    element("p", "", "DigUp can find code by what it does, in folders you choose for it. Code gets an "
+                    element("p", "", "NeuralSpotlight can find code by what it does, in folders you choose for it. Code gets an "
                             + "index of its own and never shows up in other searches."), actions);
   }
   return centered(icon, element("h3", "", "Search your code"),
@@ -868,7 +868,7 @@ function renderStatus() {
       + `cy="6" r="4.6" stroke-dasharray="${(length * Math.max(0.02, app.progress)).toFixed(2)} ${length.toFixed(2)}"/></svg>`;
   }
   let count = "";
-  if (state.error) count = `DigUp's helper: ${state.error}`;
+  if (state.error) count = `NeuralSpotlight's helper: ${state.error}`;
   else if (state.hasResults && state.query.trim()) {
     const strong = state.ranked.length, weaker = state.weaker.length;
     count = app.caveat || (!state.meaning ? "Words only: meaning search isn't available"
@@ -884,8 +884,8 @@ function renderUpdate(update) {
   button.hidden = !update;
   if (!update) return;
   const text = update.state === "downloading"
-    ? `Downloading DigUp ${update.version}…` + (update.percent != null ? ` ${update.percent}%` : "")
-    : update.state === "installing" ? `Installing DigUp ${update.version}…` : `DigUp ${update.version} is available`;
+    ? `Downloading NeuralSpotlight ${update.version}…` + (update.percent != null ? ` ${update.percent}%` : "")
+    : update.state === "installing" ? `Installing NeuralSpotlight ${update.version}…` : `NeuralSpotlight ${update.version} is available`;
   button.innerHTML = '<svg viewBox="0 0 12 12"><circle cx="6" cy="6" r="6" fill="currentColor"/>'
     + '<path d="M6 3v5M3.8 6l2.2 2.2L8.2 6" fill="none" stroke="white" stroke-width="1.4" stroke-linecap="round" '
     + 'stroke-linejoin="round"/></svg>';
@@ -937,11 +937,11 @@ function showMainMenu() {
     null,
     ["Settings…", () => invoke("open_settings").catch(failed), `${MOD},`],
     state.app.update
-      ? [`Update to DigUp ${state.app.update.version}…`, () => invoke("offer_update").catch(failed), null,
+      ? [`Update to NeuralSpotlight ${state.app.update.version}…`, () => invoke("offer_update").catch(failed), null,
          state.app.update.state === "available"]
       : ["Check for Updates…", () => invoke("check_for_updates").catch(failed)],
     null,
-    ["Quit DigUp", () => invoke("quit_app").catch(failed)],
+    ["Quit NeuralSpotlight", () => invoke("quit_app").catch(failed)],
   ]);
 }
 

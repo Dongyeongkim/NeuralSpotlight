@@ -1,14 +1,14 @@
 #!/bin/bash
-# Builds the testbed: a deletable sandbox for trying DigUp on realistic files.
+# Builds the testbed: a deletable sandbox for trying NeuralSpotlight on realistic files.
 #   real/       APFS clones of a seeded random sample of your own files (no extra disk space)
 #   synthetic/  generated media with known content: the ground truth for evals
 #   traps/      cases the crawler must get right (TypeScript .ts, code projects, datasets, icons, bundles, odd names)
 #   code/       small git repos with known functions, for code search (evals/code.json)
 #
-#   scripts/make-testbed.sh [dir]        default: ~/DigUpTestbed
-# Delete it any time: rm -rf ~/DigUpTestbed
+#   scripts/make-testbed.sh [dir]        default: ~/NeuralSpotlightTestbed
+# Delete it any time: rm -rf ~/NeuralSpotlightTestbed
 set -euo pipefail
-TB="${1:-$HOME/DigUpTestbed}"
+TB="${1:-$HOME/NeuralSpotlightTestbed}"
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 command -v ffmpeg >/dev/null || { echo "needs ffmpeg (brew install ffmpeg)"; exit 1; }
@@ -66,9 +66,9 @@ echo "== code/ =="
 python3 -I "$REPO/scripts/testbed/make_code.py" "$TB/code"
 
 cat > "$TB/README.md" <<'EOF'
-# DigUp testbed
+# NeuralSpotlight testbed
 
-A sandbox for testing DigUp. Delete it whenever you like: `rm -rf ~/DigUpTestbed`.
+A sandbox for testing NeuralSpotlight. Delete it whenever you like: `rm -rf ~/NeuralSpotlightTestbed`.
 Rebuild it with `scripts/make-testbed.sh` in the emgemma_app repo.
 
 - `real/`: APFS clones of a random sample of your own files (screenshots, images, PDFs, docs, videos, audio).

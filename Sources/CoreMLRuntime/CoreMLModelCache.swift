@@ -1,7 +1,7 @@
 import CoreML
 import CryptoKit
 import Darwin
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 
 /// Shared by the text and media runtimes. Receipts avoid rereading unchanged pinned weights when a helper restarts.
@@ -75,15 +75,17 @@ enum CoreMLModelCache {
         let destination = cache.appendingPathComponent(name + ".mlmodelc", isDirectory: true)
         let marker = "1\n\(package)\n\(CoreMLModelFiles.revision)\n"
         return try withLock(at: cache.appendingPathComponent(name + ".lock")) {
-            let stamp = destination.appendingPathComponent("digup-revision")
-            if (try? String(contentsOf: stamp, encoding: .utf8)) == marker { return destination }
+            let stamp = destination.appendingPathComponent("neuralspotlight-revision")
+            let legacyStamp = destination.appendingPathComponent("digup-revision")
+            if (try? String(contentsOf: stamp, encoding: .utf8)) == marker
+                || (try? String(contentsOf: legacyStamp, encoding: .utf8)) == marker { return destination }
 
             let temporary = try MLModel.compileModel(at: source)
             defer { try? FileManager.default.removeItem(at: temporary) }
             let staged = cache.appendingPathComponent(UUID().uuidString + ".mlmodelc", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: staged) }
             try FileManager.default.copyItem(at: temporary, to: staged)
-            try marker.write(to: staged.appendingPathComponent("digup-revision"), atomically: true, encoding: .utf8)
+            try marker.write(to: staged.appendingPathComponent("neuralspotlight-revision"), atomically: true, encoding: .utf8)
             if FileManager.default.fileExists(atPath: destination.path) {
                 try FileManager.default.removeItem(at: destination)
             }

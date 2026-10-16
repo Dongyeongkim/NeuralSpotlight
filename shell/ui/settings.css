@@ -68,7 +68,7 @@ select.field {
 .facts .fact { display: flex; justify-content: space-between; gap: 16px; padding: 9px 12px; border-top: 1px solid var(--line); font-size: 13px; }
 .facts .fact:first-child { border-top: 0; }
 .facts .fact span:last-child { color: var(--secondary); text-align: right; }
-/* A long path loses its start: "…/DigUp/Models". */
+/* A long path loses its start: "…/NeuralSpotlight/Models". */
 .path-button { font: inherit; font-size: 12px; color: var(--secondary); background: none; border: 0; padding: 0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: right; }
 .path-button bdi { direction: ltr; unicode-bidi: isolate; }
 .path-button:hover { color: var(--text); text-decoration: underline; }

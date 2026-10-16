@@ -1,9 +1,9 @@
-// Makes the test pictures in Tests/DigUpKitTests/Pictures: a 400×240 pattern of four colored quadrants (top left red,
+// Makes the test pictures in Tests/NeuralSpotlightKitTests/Pictures: a 400×240 pattern of four colored quadrants (top left red,
 // top right green, bottom left blue, bottom right yellow) stored with EXIF orientation 6 (shown turned 90° clockwise)
 // and a DateTimeOriginal, in the formats stb can't read (HEIC, TIFF, WebP) and as a JPEG, plus an upright AVIF (ImageIO
 // writes AVIF without orientation). macOS only (ImageIO writes them; cwebp, from Homebrew's webp, makes the WebP from
 // the JPEG with its EXIF):
-//   swift scripts/testbed/make_test_pictures.swift Tests/DigUpKitTests/Pictures
+//   swift scripts/testbed/make_test_pictures.swift Tests/NeuralSpotlightKitTests/Pictures
 import CoreGraphics
 import Foundation
 import ImageIO

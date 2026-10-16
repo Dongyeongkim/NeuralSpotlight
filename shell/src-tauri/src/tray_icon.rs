@@ -1,4 +1,4 @@
-//! The tray icon: DigUp's logo (Resources/AppIcon/tray.svg and its tray*.png, as the Mac app's menubar shows it). While
+//! The tray icon: NeuralSpotlight's logo (Resources/AppIcon/tray.svg and its tray*.png, as the Mac app's menubar shows it). While
 //! the model downloads or files index, the tiles are dimmed and get their color back in a sweep from the top, clockwise,
 //! as far as it has come; while indexing is paused, two bars take the D's place. An update waiting puts a red dot at the
 //! top right, as on the Mac.

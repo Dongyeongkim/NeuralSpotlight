@@ -20,7 +20,7 @@ case "$(uname -s)-$(uname -m)" in
   *) echo "no PDFium build known for $(uname -s)-$(uname -m)"; exit 1 ;;
 esac
 T=Vendor/fetch-tmp
-rm -rf "$T" && mkdir -p "$T"
+rm -rf "$T" Vendor/llama Vendor/llama-build Vendor/llama.cpp && mkdir -p "$T"
 # On Windows "python3" can be the Microsoft Store's stub, which only opens the Store.
 PYTHON=python3
 python3 -c 'import zipfile' 2>/dev/null || PYTHON=python

@@ -1,5 +1,5 @@
-/* The window. Sizes and wording follow the Mac app's search window (Sources/DigUpApp/SearchWindow.swift); the colors
-   are DigUp's (moss and amber) over the system's light or dark, and selection is the usual blue. */
+/* The window. Sizes and wording follow the Mac app's search window (Sources/NeuralSpotlightApp/SearchWindow.swift); the colors
+   are NeuralSpotlight's (moss and amber) over the system's light or dark, and selection is the usual blue. */
 
 :root {
   --amber: #f2a22a;

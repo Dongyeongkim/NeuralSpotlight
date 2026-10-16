@@ -1,11 +1,11 @@
 import CoreML
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 import Testing
 @testable import CoreMLRuntime
 
-/// Exercise the actual fixed-shape graphs. Run explicitly with the pinned assets and DIGUP_TEST_COREML=1.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"] == "1"), .serialized)
+/// Exercise the actual fixed-shape graphs. Run explicitly with the pinned assets and NEURALSPOTLIGHT_TEST_COREML=1.
+@Suite(.enabled(if: (ProcessInfo.processInfo.environment["NEURALSPOTLIGHT_TEST_COREML"] ?? ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"]) == "1"), .serialized)
 struct CoreMLQueryRuntimeTests {
     private func cosine(_ lhs: [Float], _ rhs: [Float]) -> Double {
         zip(lhs, rhs).reduce(0) { $0 + Double($1.0) * Double($1.1) }

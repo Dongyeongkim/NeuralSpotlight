@@ -1,5 +1,5 @@
 /// Gemma 4 image sizing and Pillow-compatible resampling used by the Core ML vision encoder.
-/// Kept from DigUp's previous runtime so switching inference engines preserves the same input pixels.
+/// Kept from NeuralSpotlight's previous runtime so switching inference engines preserves the same input pixels.
 enum ImageSizing {
     /// transformers' Gemma 4 image processor: scale to fill `budget` soft tokens (each 3 × 3 patches of 16 px) keeping
     /// the aspect ratio, each side rounded down to a multiple of 48 px.

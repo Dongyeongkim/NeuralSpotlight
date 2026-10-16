@@ -1,6 +1,6 @@
-// DigUp's setup window: what to search and the shortcut, with the model downloading in the background from the moment
+// NeuralSpotlight's setup window: what to search and the shortcut, with the model downloading in the background from the moment
 // it opens (the shell starts that), as the Mac app's onboarding does. Folders show what's in them and how long their
-// first pass takes (`digup estimate`; the times once the helper has timed this computer with the model), and open to
+// first pass takes (`neuralspotlight estimate`; the times once the helper has timed this computer with the model), and open to
 // their subfolders. Indexing starts as the folders step is left; the last step shows it going (the download, then the
 // files, with the time left) until Done opens the window. Choose Folders… later is the folders step alone, with Save.
 // `?code`: the folders step for code search (Settings → Code → Add Folders…, as the Mac app's code folder list): folders
@@ -193,7 +193,7 @@ function folderBox(row) {
   if (answer?.failed) text.append(element("div", "counts", "Couldn't look inside it; it can still be searched."));
   else if (answer?.readable === false) text.append(element("div", "counts problem", "Can't read it"));
   else if (part && Object.values(part.files).some((count) => count > 0)) text.append(element("div", "counts", countsText(part.files)));
-  else text.append(element("div", "path", answer ? (Object.keys(answer.files || {}).length ? "Nothing to search in the subfolders checked" : codeMode ? "No code here" : "Nothing DigUp searches in it") : native(row)));
+  else text.append(element("div", "path", answer ? (Object.keys(answer.files || {}).length ? "Nothing to search in the subfolders checked" : codeMode ? "No code here" : "Nothing NeuralSpotlight searches in it") : native(row)));
   header.append(disclosure, check, text);
   if (answer && !answer.failed && answer.readable !== false && calibrated) header.append(timeOf(part, mark === "off"));
   else if (!answer) header.append(element("div", "time", "…"));
@@ -277,7 +277,7 @@ function countsText(files) {
     part(files.doc, "document", "documents"),
     part(files.audio, "recording", "recordings"),
     part(files.video, "video", "videos"),
-  ].filter(Boolean).join(" · ") || "Nothing DigUp searches in it";
+  ].filter(Boolean).join(" · ") || "Nothing NeuralSpotlight searches in it";
 }
 
 /// "360 KB", "12 MB": an index's size, roughly.
@@ -385,7 +385,7 @@ function renderFooter() {
     // Later (Choose Folders…) the folders searched already aren't read again: no first pass to tell.
     else if (!firstTime) summary = "";
     else if (calibrated) summary = `First pass: about ${roughDuration(selectionPart().seconds)}`;
-    else summary = "Times show once DigUp has timed this computer";
+    else summary = "Times show once NeuralSpotlight has timed this computer";
   }
   if (PAGES[page] === "code") {
     const chosen = [...codeChosen].map((folder) => codeEstimates.get(key(folder))).filter(Boolean);
@@ -490,14 +490,14 @@ function renderProgress() {
   } else if (state.measuring) {
     label = "Checking this computer's speed";
     busy = true;
-    note = "DigUp times its model on this computer once, to tell how long indexing takes here.";
+    note = "NeuralSpotlight times its model on this computer once, to tell how long indexing takes here.";
   } else if (state.activity === "indexing" && state.indexing) {
     const { done: count, total } = state.indexing;
     label = "Reading your files";
     fraction = total ? count / total : 0;
     const seconds = timeLeft();
     time = `${count.toLocaleString()} of ${total.toLocaleString()}` + (seconds != null ? ` · ${leftText(seconds)}` : "");
-    note = "You can search right away: results fill in as DigUp reads your files, newest first.";
+    note = "You can search right away: results fill in as NeuralSpotlight reads your files, newest first.";
   } else if (state.activity === "finishing" && progress.rest) {
     const { done: count, total, files } = progress.rest;
     label = `Reading the rest of ${files.toLocaleString()} long ${files === 1 ? "file" : "files"}`;
@@ -621,9 +621,9 @@ function showKeys(hotkey) {
 /// desktops).
 function showShortcut(shortcut) {
   const notes = {
-    gnome: "DigUp adds it to GNOME's keyboard shortcuts. To change it later: Settings → Keyboard → View and Customize " +
+    gnome: "NeuralSpotlight adds it to GNOME's keyboard shortcuts. To change it later: Settings → Keyboard → View and Customize " +
       "Shortcuts → Custom Shortcuts.",
-    kde: "DigUp adds it to KDE's shortcuts. To change it later: System Settings → Shortcuts → DigUp.",
+    kde: "NeuralSpotlight adds it to KDE's shortcuts. To change it later: System Settings → Shortcuts → NeuralSpotlight.",
     by_hand: "This desktop doesn't let apps set their own shortcuts. To open the panel with one, add a shortcut in " +
       "its keyboard settings that runs:",
   };
@@ -635,7 +635,7 @@ function showShortcut(shortcut) {
   $("change-shortcut").hidden = shortcut?.method !== "grab";
 }
 
-// Where DigUp grabs the shortcut itself (Windows, X11), it can be changed here (shortcut.js).
+// Where NeuralSpotlight grabs the shortcut itself (Windows, X11), it can be changed here (shortcut.js).
 $("change-shortcut").addEventListener("click", () => {
   $("change-shortcut").hidden = true;
   $("recording").hidden = false;
@@ -662,9 +662,9 @@ async function start() {
     estimateCode();
   }
   if (codeMode) {
-    $("folders").querySelector("h2").textContent = "Which code should DigUp search?";
+    $("folders").querySelector("h2").textContent = "Which code should NeuralSpotlight search?";
     $("folders-subtitle").textContent = "Pick the folders with your code, and open one to leave out some of its "
-      + "repositories. DigUp reads what git keeps (not dependencies or build output) into an index of its own, so "
+      + "repositories. NeuralSpotlight reads what git keeps (not dependencies or build output) into an index of its own, so "
       + "code shows up only when you search for code.";
   }
   progress.state = info.state || {};

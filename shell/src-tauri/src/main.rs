@@ -1,7 +1,7 @@
-// DigUp's shell for Windows and Linux (tried out on the Mac first): the tray icon, the hotkey, the search panel, the
-// window, and the setup and settings windows. The work is DigUp's helper, `digup`, run as processes speaking JSON lines
+// NeuralSpotlight's shell for Windows and Linux (tried out on the Mac first): the tray icon, the hotkey, the search panel, the
+// window, and the setup and settings windows. The work is NeuralSpotlight's helper, `neuralspotlight`, run as processes speaking JSON lines
 // (helper.rs): `search-service` answers the panel and the window, `index-service` keeps the index current,
-// `download-model` fetches the model, `estimate` sizes up folders. The Mac app (Sources/DigUpApp) is the reference for
+// `download-model` fetches the model, `estimate` sizes up folders. The Mac app (Sources/NeuralSpotlightApp) is the reference for
 // behavior.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -52,7 +52,7 @@ struct Shell {
     options: Options,
     settings: Mutex<Settings>,
     settings_path: PathBuf,
-    /// How the panel's shortcut reaches DigUp on this desktop (hotkey.rs).
+    /// How the panel's shortcut reaches NeuralSpotlight on this desktop (hotkey.rs).
     shortcut: Method,
     /// The desktop places windows itself (GTK on Wayland), so the panel sits where it puts it unless the person has it
     /// centered (Settings): its window then fills the screen and the page places the panel (wayland.rs).
@@ -128,7 +128,7 @@ impl Shell {
         self.options.hotkey.clone().unwrap_or(if chosen.is_empty() { DEFAULT_HOTKEY.to_string() } else { chosen })
     }
 
-    /// The shortcut as people read it: the desktop's, once DigUp's is there (it may have been changed there).
+    /// The shortcut as people read it: the desktop's, once NeuralSpotlight's is there (it may have been changed there).
     fn hotkey_text(&self) -> String {
         #[cfg(target_os = "linux")]
         match self.shortcut {
@@ -152,7 +152,7 @@ impl Shell {
         Launch {
             program: self.options.helper.clone(),
             args,
-            env: self.options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect(),
+            env: self.options.models.iter().map(|models| ("NEURALSPOTLIGHT_MODELS".to_string(), models.display().to_string())).collect(),
             log: Some(self.logs.join(log)),
             background: true,
         }
@@ -190,13 +190,13 @@ impl Shell {
         self.wayland && self.settings.lock().unwrap().center_panel
     }
 
-    /// A dev run: its own index, folders or settings file. It leaves alone what an installed DigUp keeps outside its
+    /// A dev run: its own index, folders or settings file. It leaves alone what an installed NeuralSpotlight keeps outside its
     /// settings (the entry that opens it at login, GNOME's shortcut), which would otherwise point at the dev build.
     fn dev_run(&self) -> bool {
         self.options.index.is_some() || !self.options.roots.is_empty() || self.options.settings.is_some()
     }
 
-    /// DigUp may open at login: not on a Mac (the DigUp app has its own login item) and not in a dev run.
+    /// NeuralSpotlight may open at login: not on a Mac (the NeuralSpotlight app has its own login item) and not in a dev run.
     fn opens_at_login(&self) -> bool {
         !cfg!(target_os = "macos") && !self.dev_run()
     }
@@ -241,7 +241,7 @@ async fn ask(shell: State<'_, Arc<Shell>>, request: Value) -> Result<Value, Stri
     shell.search.ask(request).await
 }
 
-/// What indexing these folders would take, one answer per folder (`digup estimate --json`): files by kind, the first
+/// What indexing these folders would take, one answer per folder (`neuralspotlight estimate --json`): files by kind, the first
 /// pass's seconds, the rest of long files, subfolders. For setup.
 #[tauri::command]
 async fn estimate(shell: State<'_, Arc<Shell>>, folders: Vec<String>, code: Option<bool>) -> Result<Vec<Value>, String> {
@@ -327,7 +327,7 @@ fn apply_setup_folders(app: AppHandle, shell: State<'_, Arc<Shell>>, folders: Ve
     Ok(())
 }
 
-/// Setup's last step, Done (indexing has started already): the first time, DigUp opens at login from now on, gets its
+/// Setup's last step, Done (indexing has started already): the first time, NeuralSpotlight opens at login from now on, gets its
 /// shortcut on GNOME, and its window comes up.
 #[tauri::command]
 fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), String> {
@@ -337,10 +337,10 @@ fn finish_setup(app: AppHandle, shell: State<'_, Arc<Shell>>) -> Result<(), Stri
         settings.set_up = true;
         settings.save(&shell.settings_path).map_err(|error| format!("can't save the settings: {error}"))?;
     }
-    // The first setup has DigUp open at login (it lives in the tray; Settings turns that off), as the Mac app does.
+    // The first setup has NeuralSpotlight open at login (it lives in the tray; Settings turns that off), as the Mac app does.
     if first && shell.opens_at_login() {
         if let Err(error) = app.autolaunch().enable() {
-            eprintln!("digup-shell: can't open at login: {error}");
+            eprintln!("neuralspotlight-shell: can't open at login: {error}");
         }
     }
     // The first setup adds the shortcut to GNOME's settings; a later one (Choose Folders…) leaves it as the person has
@@ -383,7 +383,7 @@ fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u
     if let Some((editor, program)) = editors::chosen(&choice) {
         match editor.open(&program, &path, line.max(1)) {
             Ok(()) => return Ok(()),
-            Err(error) => eprintln!("digup-shell: {} didn't start: {error}", program.display()),
+            Err(error) => eprintln!("neuralspotlight-shell: {} didn't start: {error}", program.display()),
         }
     }
     app.opener().open_path(path, None::<&str>).map_err(|error| error.to_string())
@@ -392,11 +392,11 @@ fn open_code(app: AppHandle, shell: State<'_, Arc<Shell>>, path: String, line: u
 /// Ctrl+C on a result: the file on the clipboard, to paste in a file manager, a mail or a chat.
 #[tauri::command]
 fn copy_file(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
-    clipboard::copy_file(&window, Path::new(&path)).inspect_err(|error| eprintln!("digup-shell: can't copy {path}: {error}"))
+    clipboard::copy_file(&window, Path::new(&path)).inspect_err(|error| eprintln!("neuralspotlight-shell: can't copy {path}: {error}"))
 }
 
 /// A result dragged out of the window (to a file manager, a mail, a chat) on Windows and the Mac: the system's own drag
-/// of the file, with its thumbnail (`icon`, a picture already rendered) or DigUp's icon under the pointer, started while
+/// of the file, with its thumbnail (`icon`, a picture already rendered) or NeuralSpotlight's icon under the pointer, started while
 /// the button is down. On Linux the page drags it itself (WebKit's drag starts from the press, as Wayland wants).
 #[cfg(target_os = "linux")]
 #[tauri::command]
@@ -416,7 +416,7 @@ fn drag_out(window: tauri::WebviewWindow, path: String, icon: Option<String>) ->
             let started = drag::start_drag(&source, drag::DragItem::Files(vec![file]), image, |_, _| {},
                                            drag::Options::default());
             if let Err(error) = started {
-                eprintln!("digup-shell: can't drag the file out: {error}");
+                eprintln!("neuralspotlight-shell: can't drag the file out: {error}");
             }
         })
         .map_err(|error| error.to_string())
@@ -552,7 +552,7 @@ fn close_window(window: tauri::WebviewWindow) {
 
 /// Runs `work` on the main thread from its event loop, after whatever called this has returned. It's asked from another
 /// thread: asked on the main thread, `run_on_main_thread` runs it at once, and a window made inside a page's command or
-/// inside the message a second launch sends deadlocks WebView2 on Windows (a blank window and a frozen DigUp).
+/// inside the message a second launch sends deadlocks WebView2 on Windows (a blank window and a frozen NeuralSpotlight).
 fn later(app: &AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -561,7 +561,7 @@ fn later(app: &AppHandle, work: impl FnOnce(&AppHandle) + Send + 'static) {
     });
 }
 
-/// The window, or setup while DigUp isn't set up (the tray's Open DigUp, a click on the tray icon, a second launch).
+/// The window, or setup while NeuralSpotlight isn't set up (the tray's Open NeuralSpotlight, a click on the tray icon, a second launch).
 fn show_window_or_setup(app: &AppHandle) {
     later(app, |app| {
         let _ = if app.state::<Arc<Shell>>().is_set_up() { show_window(app) } else { show_setup(app) };
@@ -572,17 +572,17 @@ fn main() {
     let options = match Options::from_args() {
         Ok(options) => options,
         Err(error) => {
-            eprintln!("digup-shell: {error}");
+            eprintln!("neuralspotlight-shell: {error}");
             std::process::exit(2);
         }
     };
-    // A desktop shortcut's `--toggle` while DigUp runs goes to it before this process starts GTK (hotkey.rs).
+    // A desktop shortcut's `--toggle` while NeuralSpotlight runs goes to it before this process starts GTK (hotkey.rs).
     #[cfg(target_os = "linux")]
     if options.toggle && hotkey::hand_over() {
         return;
     }
     let app = tauri::Builder::default()
-        // A second launch (DigUp opened again from the app grid or the Start menu) shows the window, as on the Mac; a
+        // A second launch (NeuralSpotlight opened again from the app grid or the Start menu) shows the window, as on the Mac; a
         // desktop shortcut's `--toggle` shows or hides the panel. The window is made once the second launch's message
         // has been answered: on Windows it comes as a message the other process waits on.
         .plugin(tauri_plugin_single_instance::init(|app, args, _| {
@@ -595,7 +595,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        // The launch at login says so: DigUp then waits in the tray instead of showing its window.
+        // The launch at login says so: NeuralSpotlight then waits in the tray instead of showing its window.
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--at-login"])))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -616,7 +616,7 @@ fn main() {
             set_tray_click, check_for_updates, offer_update, set_update_checks
         ])
         .build(tauri::generate_context!())
-        .expect("DigUp couldn't start");
+        .expect("NeuralSpotlight couldn't start");
     app.run(|app, event| match event {
         tauri::RunEvent::Exit => {
             stop_helpers(app);
@@ -625,7 +625,7 @@ fn main() {
                 hotkey::kde::stop();
             }
         }
-        // Closing the last window isn't quitting: DigUp lives in the tray.
+        // Closing the last window isn't quitting: NeuralSpotlight lives in the tray.
         tauri::RunEvent::ExitRequested { code: None, api, .. } => api.prevent_exit(),
         _ => {}
     });
@@ -661,7 +661,7 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
         Launch {
             program: options.helper.clone(),
             args: search_args,
-            env: options.models.iter().map(|models| ("DIGUP_MODELS".to_string(), models.display().to_string())).collect(),
+            env: options.models.iter().map(|models| ("NEURALSPOTLIGHT_MODELS".to_string(), models.display().to_string())).collect(),
             log: Some(logs.join("search.log")),
             background: false,   // it answers typing
         },
@@ -725,26 +725,26 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     make_panel(&handle, shell.centers_panel())?;
     // No tray (a session without a taskbar, a Linux desktop without one): the hotkey and the panel still work.
     if let Err(error) = make_tray(&handle, &shell) {
-        eprintln!("digup-shell: no tray icon: {error}");
+        eprintln!("neuralspotlight-shell: no tray icon: {error}");
     }
     match shell.shortcut {
         Method::Grab => {
             let hotkey = shell.hotkey();
             if let Err(error) = app.global_shortcut().register(hotkey.as_str()) {
                 set_status(&handle, &format!("The shortcut {} is taken", shortcut_text(&hotkey)));
-                eprintln!("digup-shell: can't use {hotkey} as the shortcut: {error}");
+                eprintln!("neuralspotlight-shell: can't use {hotkey} as the shortcut: {error}");
             }
         }
-        // GNOME runs DigUp's custom shortcut (added at setup); its command follows DigUp when DigUp moves.
+        // GNOME runs NeuralSpotlight's custom shortcut (added at setup); its command follows NeuralSpotlight when NeuralSpotlight moves.
         #[cfg(target_os = "linux")]
         Method::Gnome if shell.is_set_up() && !shell.dev_run() => hotkey::gnome::refresh(&hotkey::toggle_command()),
-        // KDE signals DigUp while it runs.
+        // KDE signals NeuralSpotlight while it runs.
         #[cfg(target_os = "linux")]
         Method::Kde => {
             let pressed = handle.clone();
             if let Err(error) = hotkey::kde::listen(&shell.hotkey(), move || toggle_panel(&pressed)) {
                 set_status(&handle, &format!("The shortcut couldn't be added to KDE's settings: {error}"));
-                eprintln!("digup-shell: can't add the shortcut to KDE's: {error}");
+                eprintln!("neuralspotlight-shell: can't add the shortcut to KDE's: {error}");
             }
         }
         _ => {}
@@ -787,22 +787,22 @@ fn setup(app: &mut tauri::App, options: Options) -> Result<(), Box<dyn std::erro
     }
     let options = &shell.options;
     if options.toggle || options.debug_show && options.debug_window.is_none() {
-        // Started by the shortcut (DigUp wasn't running): the panel comes up as it would have.
+        // Started by the shortcut (NeuralSpotlight wasn't running): the panel comes up as it would have.
         show_panel(&handle);
     } else if options.debug_window.is_some() || shell.is_set_up() && !options.at_login && options.debug_query.is_none() {
-        // Opened by hand: the window, so opening DigUp never looks like nothing happened (at login it waits in the
+        // Opened by hand: the window, so opening NeuralSpotlight never looks like nothing happened (at login it waits in the
         // tray).
         if let Err(error) = show_window(&handle) {
-            eprintln!("digup-shell: can't open the window: {error}");
+            eprintln!("neuralspotlight-shell: can't open the window: {error}");
         }
     }
     watch_hours(&handle);
     updates::start(&handle);
-    // The entry that opens DigUp at login is written again: it follows DigUp if it moved, and older ones didn't say
+    // The entry that opens NeuralSpotlight at login is written again: it follows NeuralSpotlight if it moved, and older ones didn't say
     // `--at-login`.
     if shell.opens_at_login() && app.autolaunch().is_enabled().unwrap_or(false) {
         if let Err(error) = app.autolaunch().enable() {
-            eprintln!("digup-shell: can't renew opening at login: {error}");
+            eprintln!("neuralspotlight-shell: can't renew opening at login: {error}");
         }
     }
     Ok(())
@@ -933,7 +933,7 @@ fn quit(app: &AppHandle) {
 fn make_panel(app: &AppHandle, centered: bool) -> tauri::Result<()> {
     let (label, page) = if centered { (CENTERED_PANEL, "index.html?fills") } else { (PANEL, "index.html") };
     let panel = WebviewWindowBuilder::new(app, label, WebviewUrl::App(page.into()))
-        .title("DigUp")
+        .title("NeuralSpotlight")
         .inner_size(PANEL_WIDTH, FIELD_HEIGHT)
         .decorations(false)
         .transparent(true)
@@ -979,7 +979,7 @@ fn remake_panel(app: &AppHandle) {
         return;
     }
     if let Err(error) = make_panel(app, shell.centers_panel()) {
-        eprintln!("digup-shell: can't make the panel: {error}");
+        eprintln!("neuralspotlight-shell: can't make the panel: {error}");
         return;
     }
     if let Some(old) = old {
@@ -1023,7 +1023,7 @@ fn toggle_panel(app: &AppHandle) {
 }
 
 /// The window: searches bigger than the panel (kind filters, a grid of pictures, the preview beside it), the home
-/// DigUp opens to by hand, and its menu (Choose Folders, Index Now, Settings, Quit) where a desktop has no tray. It's
+/// NeuralSpotlight opens to by hand, and its menu (Choose Folders, Index Now, Settings, Quit) where a desktop has no tray. It's
 /// made when it opens and gone when it closes, so a closed window costs nothing. A search the panel hands over is in
 /// `window_search`: a new window takes it as it loads, an open one is told.
 fn show_window(app: &AppHandle) -> tauri::Result<()> {
@@ -1040,7 +1040,7 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
     // Debug runs look at it hidden: a window on screen takes the keyboard.
     let hidden = shell.options.debug_window.is_some() && !shell.options.debug_show;
     let mut builder = WebviewWindowBuilder::new(app, WINDOW, WebviewUrl::App("window.html".into()))
-        .title("DigUp")
+        .title("NeuralSpotlight")
         .min_inner_size(820.0, 520.0)
         .visible(false);
     // Where it was left, at the size it had, while that's still on a screen; else sized to this screen, centered.
@@ -1075,7 +1075,7 @@ fn show_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-/// Keeps the window's place as it closes (and as DigUp quits with it open), for the next time; not a hidden debug
+/// Keeps the window's place as it closes (and as NeuralSpotlight quits with it open), for the next time; not a hidden debug
 /// run's.
 fn remember_place(window: &tauri::WebviewWindow) {
     let shell = window.state::<Arc<Shell>>();
@@ -1140,7 +1140,7 @@ fn show_setup(app: &AppHandle) -> tauri::Result<()> {
     }
     let hidden = app.state::<Arc<Shell>>().options.debug_setup;
     WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("setup.html".into()))
-        .title("Set Up DigUp")
+        .title("Set Up NeuralSpotlight")
         .inner_size(720.0, 600.0)
         .resizable(false)
         .maximizable(false)
@@ -1159,7 +1159,7 @@ fn show_settings(app: &AppHandle) -> tauri::Result<()> {
     }
     let options = &app.state::<Arc<Shell>>().options;
     WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
-        .title("DigUp Settings")
+        .title("NeuralSpotlight Settings")
         .inner_size(660.0, 620.0)
         .resizable(false)
         .maximizable(false)
@@ -1214,11 +1214,11 @@ fn storage(shell: &Shell) -> Value {
     };
     let models = shell.options.models.clone().or_else(|| {
         if cfg!(windows) {
-            std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("DigUp").join("Models"))
+            std::env::var_os("LOCALAPPDATA").map(|local| PathBuf::from(local).join("NeuralSpotlight").join("Models"))
         } else {
             let data = std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()).map(PathBuf::from)
                 .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
-            data.map(|data| data.join("digup").join("Models"))
+            data.map(|data| data.join("neuralspotlight").join("Models"))
         }
     });
     json!({
@@ -1245,7 +1245,7 @@ fn hold_hotkey(app: AppHandle, shell: State<'_, Arc<Shell>>, held: bool) {
     }
 }
 
-/// Settings → General: a new shortcut for the panel, where DigUp grabs it itself (Windows, X11; GNOME and KDE keep it in
+/// Settings → General: a new shortcut for the panel, where NeuralSpotlight grabs it itself (Windows, X11; GNOME and KDE keep it in
 /// their own settings). The new one is registered before the old one goes, so one another app holds is refused and the
 /// old one stays. Returns the shortcut as it's shown.
 #[tauri::command]
@@ -1397,7 +1397,7 @@ async fn check_for_updates(app: AppHandle) {
     updates::check(&app, true).await;
 }
 
-/// "Update to DigUp X…" (the tray, the window's status bar and ⋯): what's new, then Install and Restart.
+/// "Update to NeuralSpotlight X…" (the tray, the window's status bar and ⋯): what's new, then Install and Restart.
 #[tauri::command]
 fn offer_update(app: AppHandle) {
     updates::offer(&app);
@@ -1514,28 +1514,28 @@ fn shortcut_text(accelerator: &str) -> String {
 
 fn make_tray(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
-    // The shortcut beside Search… only where DigUp grabs it: elsewhere the desktop has it, maybe changed there.
+    // The shortcut beside Search… only where NeuralSpotlight grabs it: elsewhere the desktop has it, maybe changed there.
     let accelerator = (shell.shortcut == Method::Grab).then(|| shell.hotkey());
     let search = MenuItem::with_id(app, "search", "Search…", true, accelerator.as_deref())?;
-    let open = MenuItem::with_id(app, "open", "Open DigUp", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open NeuralSpotlight", true, None::<&str>)?;
     let folders = MenuItem::with_id(app, "folders", "Choose Folders…", true, None::<&str>)?;
     let index = MenuItem::with_id(app, "index", "Index Now", true, None::<&str>)?;
     let pause = MenuItem::with_id(app, "pause", "Pause Indexing", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check", "Check for Updates…", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit DigUp", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit NeuralSpotlight", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(
         app,
         &[&status, &separator, &search, &open, &folders, &index, &pause, &settings, &check,
           &PredefinedMenuItem::separator(app)?, &quit_item],
     )?;
-    // DigUp's logo, in its colors (tray_icon.rs).
+    // NeuralSpotlight's logo, in its colors (tray_icon.rs).
     let look = tray_icon::Look::new(None, false);
     *shell.tray_look.lock().unwrap() = Some(look);
-    TrayIconBuilder::with_id("digup")
+    TrayIconBuilder::with_id("neuralspotlight")
         .icon(tray_icon::image(look))
-        .tooltip("DigUp")
+        .tooltip("NeuralSpotlight")
         .menu(&menu)
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -1561,7 +1561,7 @@ fn make_tray(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            // Windows (and trays on Linux that report clicks): a click opens DigUp's window, as a click on an app's
+            // Windows (and trays on Linux that report clicks): a click opens NeuralSpotlight's window, as a click on an app's
             // tray icon does there, or shows the search panel if the person chose that (Settings → General); the menu
             // is on the other button.
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
@@ -1658,7 +1658,7 @@ fn changed(app: &AppHandle) {
         .with_update(!snapshot["update"].is_null());
     let mut shown = shell.tray_look.lock().unwrap();
     if shown.is_some() && *shown != Some(look) {
-        if let Some(tray) = app.tray_by_id("digup") {
+        if let Some(tray) = app.tray_by_id("neuralspotlight") {
             if tray.set_icon(Some(tray_icon::image(look))).is_ok() {
                 *shown = Some(look);
             }
@@ -1748,7 +1748,7 @@ fn index_ended(app: &AppHandle, event: &Value) {
         stops.retain(|stop| stop.elapsed() < Duration::from_secs(600));
         stops.push(Instant::now());
         if stops.len() > 3 {
-            eprintln!("digup-shell: indexing stopped on files 4 times in 10 min");
+            eprintln!("neuralspotlight-shell: indexing stopped on files 4 times in 10 min");
         }
         stops.len() <= 3
     } else {
@@ -1788,7 +1788,7 @@ fn model_event(app: &AppHandle, event: Value) {
     }
 }
 
-/// Once the model is in: this computer's speed with the model (`digup speed --model --if-needed`: once, kept beside
+/// Once the model is in: this computer's speed with the model (`neuralspotlight speed --model --if-needed`: once, kept beside
 /// the index; estimates on Linux and Windows go by it until indexing has measured enough itself), then indexing.
 fn measure_then_index(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
@@ -1803,7 +1803,7 @@ fn measure_then_index(app: &AppHandle) {
     changed(app);
     let app = app.clone();
     std::thread::spawn(move || {
-        // Setup's folder estimates (walking folders, reading PDFs and media) would slow the check, and DigUp would then
+        // Setup's folder estimates (walking folders, reading PDFs and media) would slow the check, and NeuralSpotlight would then
         // take this computer for slower than it is: they go first (two minutes at most).
         let waiting = Instant::now();
         while shell.estimating.load(Ordering::SeqCst) > 0 && waiting.elapsed() < Duration::from_secs(120) {
@@ -1814,7 +1814,7 @@ fn measure_then_index(app: &AppHandle) {
         let mut command = std::process::Command::new(&shell.options.helper);
         command.args(["speed", "--model", "--if-needed", "--when-quiet", "60", "--json"]).args(shell.index_arguments());
         if let Some(models) = &shell.options.models {
-            command.env("DIGUP_MODELS", models);
+            command.env("NEURALSPOTLIGHT_MODELS", models);
         }
         // Its reply goes to speed.log after what it said on the way (the model's own lines go to the index's worker.log).
         let log = std::fs::OpenOptions::new().create(true).append(true).open(shell.logs.join("speed.log")).ok();

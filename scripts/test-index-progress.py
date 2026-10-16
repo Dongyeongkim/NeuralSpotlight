@@ -1,7 +1,7 @@
 """Regression check for the app helper's collection-wide indexing progress.
 
 Run after building the CLI:
-    uv run --no-project scripts/test-index-progress.py /path/to/digup
+    uv run --no-project scripts/test-index-progress.py /path/to/neuralspotlight
 
 Uses only synthetic files, a uv-created fake embedding worker, and a temporary index.
 No model download, personal folders, app settings, or installed index are involved.
@@ -91,7 +91,7 @@ def run_service(binary, base, backfill, sync_only=False):
         arguments.append("--backfill")
     if sync_only:
         arguments.append("--sync-only")
-    environment = dict(os.environ, DIGUP_WORKER_DIR=str(base / "worker"))
+    environment = dict(os.environ, NEURALSPOTLIGHT_WORKER_DIR=str(base / "worker"))
     # A file avoids blocking on stderr if an extractor writes diagnostics.
     with (base / "stderr.log").open("w+") as stderr:
         process = subprocess.Popen(arguments, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -117,18 +117,18 @@ def run_service(binary, base, backfill, sync_only=False):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", type=Path, help="Freshly built digup CLI")
+    parser.add_argument("binary", type=Path, help="Freshly built neuralspotlight CLI")
     arguments = parser.parse_args()
     binary = arguments.binary.resolve()
     assert binary.is_file(), f"CLI not found: {binary}"
-    with tempfile.TemporaryDirectory(prefix="digup-progress-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="neuralspotlight-progress-") as temporary:
         base = Path(temporary).resolve()  # Match the crawler's /private/var path spelling on macOS.
         for name in ("files", "code", "worker"):
             (base / name).mkdir()
         subprocess.run(["uv", "venv", "--offline", "--python", sys.executable,
                         str(base / "worker" / ".venv")], check=True, capture_output=True,
                        env=dict(os.environ, UV_CACHE_DIR=str(base / "uv-cache")))
-        (base / "worker" / "digup_worker.py").write_text(WORKER)
+        (base / "worker" / "neuralspotlight_worker.py").write_text(WORKER)
         (base / "files" / "ordinary.txt").write_text("Plain text stays in Spotlight.")
         recent = []
         for number in range(4):
@@ -196,7 +196,7 @@ def main():
         write_pdf(base / "files" / "new-while-paused.pdf")
         (base / "code" / "new-while-paused.swift").write_text("let queued = true\n")
         # The worker is deliberately unavailable: metadata-only work must not need it.
-        (base / "worker" / "digup_worker.py").unlink()
+        (base / "worker" / "neuralspotlight_worker.py").unlink()
         reconciled = run_service(binary, base, backfill=True, sync_only=True)
         assert not any(event["event"] in ("file", "rest", "indexing", "reindex", "waiting")
                        for event in reconciled), reconciled

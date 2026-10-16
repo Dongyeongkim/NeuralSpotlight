@@ -8,16 +8,16 @@
 # same way. The app's log is <index>/app.log.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-TB="${TESTBED:-$HOME/DigUpTestbed}"
+TB="${TESTBED:-$HOME/NeuralSpotlightTestbed}"
 INDEX="${INDEX:-$PWD/.dev/app-index}"
 MODELS="${MODELS:-$PWD/.dev/models}"
 SUITE="${SUITE:-com.neuralspotlight.dev}"
 
 # Use the model manifest rather than copying an obsolete runtime's files. The app resumes any missing Core ML
-# downloads itself; to provision before launch: .build/debug/digup download-model --to .dev/models
+# downloads itself; to provision before launch: .build/debug/neuralspotlight download-model --to .dev/models
 mkdir -p "$MODELS"
 
-# Only an earlier run of this same copy is stopped: an installed DigUp in use keeps running.
+# Only an earlier run of this same copy is stopped: an installed NeuralSpotlight in use keeps running.
 APP="${APP:-build.noindex/NeuralSpotlight.app}"
 EXE="$(cd "$APP" && pwd -P)/Contents/MacOS/NeuralSpotlight"
 for pid in $(pgrep -x NeuralSpotlight); do

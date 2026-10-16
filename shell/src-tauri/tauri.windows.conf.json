@@ -1,5 +1,5 @@
 {
-  "mainBinaryName": "DigUp",
+  "mainBinaryName": "NeuralSpotlight",
   "bundle": {
     "windows": {
       "nsis": {

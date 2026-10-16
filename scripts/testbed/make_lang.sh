@@ -1,6 +1,6 @@
 #!/bin/bash
 # Bengali and Arabic files with known content (evals/multilingual.json): notes, PDFs, screenshots and speech.
-#   scripts/testbed/make_lang.sh <dir>       e.g. ~/DigUpTestbed/synthetic/lang
+#   scripts/testbed/make_lang.sh <dir>       e.g. ~/NeuralSpotlightTestbed/synthetic/lang
 set -euo pipefail
 L="${1:?usage: make_lang.sh <dir>}"; HERE="$(cd "$(dirname "$0")" && pwd)"
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"

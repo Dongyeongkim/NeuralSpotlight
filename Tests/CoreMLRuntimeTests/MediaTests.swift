@@ -1,7 +1,7 @@
 import AVFoundation
 import CoreGraphics
 import CoreML
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 import Testing
 @testable import CoreMLRuntime
@@ -119,7 +119,7 @@ import Testing
 
 /// Existing generated image/speech fixtures and their previous runtime vectors catch preprocessing mistakes.
 /// The new Core ML FP16 media graphs deliberately have a new vector identity, so exact byte equality is not expected.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"] == "1"), .serialized)
+@Suite(.enabled(if: (ProcessInfo.processInfo.environment["NEURALSPOTLIGHT_TEST_COREML"] ?? ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"]) == "1"), .serialized)
 struct CoreMLMediaInferenceTests {
     static let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Reference/media")
 

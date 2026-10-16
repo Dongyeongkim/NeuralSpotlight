@@ -3,7 +3,7 @@
 //! (ten at most), as on the Mac, so the code index doesn't follow every save. `notify` uses ReadDirectoryChangesW on Windows, inotify on
 //! Linux, FSEvents on a Mac. Changes where the crawl never goes are passed over (the engine's `Rules.isWalked`): hidden
 //! folders (a leading dot, or Windows' hidden flag, which AppData has), developer folders, `.noindex` folders, skipped
-//! folders, and DigUp's own index. With a home folder chosen, other apps' caches would ask for a sync every few seconds.
+//! folders, and NeuralSpotlight's own index. With a home folder chosen, other apps' caches would ask for a sync every few seconds.
 
 use notify::{RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
@@ -39,13 +39,13 @@ impl FolderWatcher {
         let mut watcher = match watcher {
             Ok(watcher) => watcher,
             Err(error) => {
-                eprintln!("digup-shell: can't watch folders: {error}");
+                eprintln!("neuralspotlight-shell: can't watch folders: {error}");
                 return FolderWatcher { _watcher: None };
             }
         };
         for folder in folders {
             if let Err(error) = watcher.watch(folder, RecursiveMode::Recursive) {
-                eprintln!("digup-shell: can't watch {}: {error}", folder.display());
+                eprintln!("neuralspotlight-shell: can't watch {}: {error}", folder.display());
             }
         }
         std::thread::spawn(move || {

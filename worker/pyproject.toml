@@ -1,7 +1,7 @@
 [project]
-name = "digup-worker"
+name = "neuralspotlight-worker"
 version = "0.1.0"
-description = "DigUp's embedding worker: EmbeddingGemma 2 on MLX (mlx-vlm), spoken to over stdin/stdout"
+description = "NeuralSpotlight's embedding worker: EmbeddingGemma 2 on MLX (mlx-vlm), spoken to over stdin/stdout"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     # EmbeddingGemma 2 support landed on mlx-vlm main on 2026-10-06 and isn't on PyPI yet; at this commit it matches

@@ -1,6 +1,6 @@
 // Adapted from FluidInference/FluidUse (Apache-2.0), revision d278e17df85e39e8c21bb64a467da81c39576fcd.
 // Original: Sources/FluidUse/EmbeddingGemma2/EmbeddingGemma2Tokenizer.swift.
-// Changes: local names/errors; validation hardening and special-token handling for DigUp.
+// Changes: local names/errors; validation hardening and special-token handling for NeuralSpotlight.
 // License: FluidUse-LICENSE.txt in this directory.
 import Foundation
 

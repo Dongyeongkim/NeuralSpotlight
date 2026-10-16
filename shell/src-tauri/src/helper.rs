@@ -1,6 +1,6 @@
-//! DigUp's helper processes, which do all the work: `digup search-service` answers the panel (a JSON request per line
-//! in, the reply on a line out with the request's id; lines without an id are events), and `digup index-service` keeps
-//! the index current (commands in, events out) and exits when it's done. Sources/digup has both protocols. Each one's
+//! NeuralSpotlight's helper processes, which do all the work: `neuralspotlight search-service` answers the panel (a JSON request per line
+//! in, the reply on a line out with the request's id; lines without an id are events), and `neuralspotlight index-service` keeps
+//! the index current (commands in, events out) and exits when it's done. Sources/neuralspotlight has both protocols. Each one's
 //! output is read on a thread of its own, which waits for the process when its output ends, so none is left a zombie.
 
 use serde_json::{json, Value};
@@ -67,7 +67,7 @@ impl Launch {
 }
 
 /// A process started apart from the helpers here (the speed check, folder estimates): on Windows it joins their job, so it
-/// ends with DigUp, and with them before an update's installer runs.
+/// ends with NeuralSpotlight, and with them before an update's installer runs.
 pub fn adopt(child: &Child) {
     #[cfg(windows)]
     job::add(child);
@@ -111,7 +111,7 @@ fn reap(child: &mut Child) -> Option<i32> {
     None
 }
 
-/// `digup search-service`: started on the first request, and again after it died.
+/// `neuralspotlight search-service`: started on the first request, and again after it died.
 pub struct SearchService {
     launch: Launch,
     running: Arc<Mutex<Option<Searching>>>,
@@ -142,7 +142,7 @@ impl SearchService {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         request["id"] = json!(id);
         let reply = self.send(id, &request)?;
-        let reply = reply.await.map_err(|_| "DigUp's helper stopped".to_string())?;
+        let reply = reply.await.map_err(|_| "NeuralSpotlight's helper stopped".to_string())?;
         match reply.get("ok") {
             Some(Value::Bool(false)) => Err(reply["error"].as_str().unwrap_or("the helper failed").to_string()),
             _ => Ok(reply),
@@ -165,7 +165,7 @@ impl SearchService {
         if let Err(error) = writeln!(searching.stdin, "{request}").and_then(|_| searching.stdin.flush()) {
             searching.pending.lock().unwrap().remove(&id);
             *running = None;
-            return Err(format!("DigUp's helper isn't answering: {error}"));
+            return Err(format!("NeuralSpotlight's helper isn't answering: {error}"));
         }
         Ok(receiver)
     }
@@ -209,7 +209,7 @@ impl SearchService {
     }
 }
 
-/// `digup index-service`: syncs the index with the folders, indexes what's new, and exits once it's done (after a
+/// `neuralspotlight index-service`: syncs the index with the folders, indexes what's new, and exits once it's done (after a
 /// minute with nothing to do). `run` starts it, asks the running one to sync again, or, when the folders changed (another
 /// launch), starts it over with them. When it ends by itself, `on_event` gets {"event": "ended", "status": its exit
 /// code, "owed": whether a sync asked of it never started}; one stopped here doesn't report.
@@ -292,7 +292,7 @@ impl IndexService {
     }
 }
 
-/// `digup download-model`: the model files, from the Hugging Face cache or downloaded with resume, each checked. One at
+/// `neuralspotlight download-model`: the model files, from the Hugging Face cache or downloaded with resume, each checked. One at
 /// a time; `run` again while it runs does nothing. Its events ("progress", "done", "error"…) go to `on_event`.
 pub struct ModelDownload {
     running: Arc<Mutex<Option<(Child, u64)>>>,
@@ -348,7 +348,7 @@ impl ModelDownload {
 }
 
 /// On Windows the helpers go into a job that closes with this process, so they end even if the shell crashes (on Linux
-/// and macOS the helpers watch their parent themselves: `ParentWatch` in Sources/digup). Their own children follow
+/// and macOS the helpers watch their parent themselves: `ParentWatch` in Sources/neuralspotlight). Their own children follow
 /// them into it.
 #[cfg(windows)]
 mod job {

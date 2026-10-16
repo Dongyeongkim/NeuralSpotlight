@@ -1,4 +1,4 @@
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 
 /// One vector-space identity for text, images and audio, all executed through Core ML.

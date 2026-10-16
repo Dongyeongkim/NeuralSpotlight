@@ -1,11 +1,11 @@
 import Foundation
-import DigUpKit
+import NeuralSpotlightKit
 import Testing
 @testable import CoreMLRuntime
 
 @Suite struct GemmaTokenizerTests {
     struct Fixture: Decodable { let text: String; let expected: [Int32]; let raw: [Int32] }
-    static let modelFolder = ProcessInfo.processInfo.environment["DIGUP_COREML_MODELS"].map { URL(fileURLWithPath: $0) }
+    static let modelFolder = (ProcessInfo.processInfo.environment["NEURALSPOTLIGHT_COREML_MODELS"] ?? ProcessInfo.processInfo.environment["DIGUP_COREML_MODELS"]).map { URL(fileURLWithPath: $0) }
         ?? URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().appendingPathComponent(".dev/models/CoreML")
     static let present = FileManager.default.fileExists(atPath: modelFolder.appendingPathComponent("tokenizer.json").path)
@@ -26,8 +26,8 @@ import Testing
     }
 }
 
-/// Opt in with DIGUP_TEST_COREML=1. The first load compiles the actual model for this device and can take minutes.
-@Suite(.enabled(if: ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"] == "1"))
+/// Opt in with NEURALSPOTLIGHT_TEST_COREML=1. The first load compiles the actual model for this device and can take minutes.
+@Suite(.enabled(if: (ProcessInfo.processInfo.environment["NEURALSPOTLIGHT_TEST_COREML"] ?? ProcessInfo.processInfo.environment["DIGUP_TEST_COREML"]) == "1"))
 struct CoreMLInferenceTests {
     @Test func actualModelAgreesWithReferenceAndRetainsLongDocumentTail() throws {
         let start = Date()

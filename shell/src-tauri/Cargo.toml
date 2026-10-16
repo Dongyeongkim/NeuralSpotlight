@@ -1,7 +1,7 @@
 [package]
-name = "digup-shell"
+name = "neuralspotlight-shell"
 version = "0.1.0"
-description = "DigUp for Windows and Linux: the tray icon, the hotkey and the search panel, over DigUp's helper"
+description = "NeuralSpotlight for Windows and Linux: the tray icon, the hotkey and the search panel, over NeuralSpotlight's helper"
 edition = "2021"
 publish = false
 
@@ -31,7 +31,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
                                               "Win32_System_Registry", "Win32_System_SystemInformation",
                                               "Win32_UI_Shell", "Win32_System_DataExchange", "Win32_System_Memory"] }
 
-# GNOME's shortcut settings, `--toggle` handed to the running DigUp, and the panel's window on Wayland (all already in
+# GNOME's shortcut settings, `--toggle` handed to the running NeuralSpotlight, and the panel's window on Wayland (all already in
 # Tauri's build on Linux).
 [target.'cfg(target_os = "linux")'.dependencies]
 gio = "0.18"

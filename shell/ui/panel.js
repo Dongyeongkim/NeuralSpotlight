@@ -1,7 +1,7 @@
-// The search panel of DigUp's Windows and Linux shell (tried out on the Mac first). Every keystroke shows keyword
+// The search panel of NeuralSpotlight's Windows and Linux shell (tried out on the Mac first). Every keystroke shows keyword
 // results at once (the last word as a prefix); once typing pauses for 120 ms the meaning results replace them (the
 // query was embedded while you typed). Results far weaker than the best are folded under "N weaker matches". The
-// helper (`digup search-service`) does the work; the Mac app's panel (Sources/DigUpApp/SearchPanel.swift) is the
+// helper (`neuralspotlight search-service`) does the work; the Mac app's panel (Sources/NeuralSpotlightApp/SearchPanel.swift) is the
 // reference for how it behaves. results.js has what a result says.
 "use strict";
 
@@ -195,7 +195,7 @@ function renderList() {
     // More of this kind than the panel has room for: all of them in the window.
     if (group.total > group.rows.length && FILTER_OF[group.title]) {
       const more = element("div", "more", `Show all ${group.total} ${group.title.toLowerCase()}…`);
-      more.title = `Open them in the DigUp window (${MOD}O shows everything)`;
+      more.title = `Open them in the NeuralSpotlight window (${MOD}O shows everything)`;
       more.onclick = () => openInWindow(FILTER_OF[group.title]);
       $list.append(more);
     }
@@ -254,14 +254,14 @@ function renderPreview() {
   $preview.replaceChildren();
   if (!state.strong.length && !state.weaker.length) {
     if (state.isCode && !state.hasCode) {
-      $preview.append(message("Code search is off", "Choose folders with code in Settings → Code, and DigUp finds "
+      $preview.append(message("Code search is off", "Choose folders with code in Settings → Code, and NeuralSpotlight finds "
         + "code by what it does."));
     } else if (state.phase === "codeHint") {
       $preview.append(message("Search your code", "Say what the code does, or type a name that's in it."));
     } else if (state.indexing) {
       const { done, total } = state.indexing;
       $preview.append(message("Nothing yet", `Still indexing (${done} of ${total} files). Until a file is read, `
-        + "DigUp finds it only by its name."));
+        + "NeuralSpotlight finds it only by its name."));
     } else if (state.isCode) {
       $preview.append(message("No good matches in your code", "Try saying what the code does, or a name that's in it."));
     } else {
@@ -362,7 +362,7 @@ function facts(hit) {
 function renderFooter() {
   const strong = state.strong.length, weaker = state.weaker.length;
   let summary;
-  if (state.error) summary = `DigUp's helper: ${state.error}`;
+  if (state.error) summary = `NeuralSpotlight's helper: ${state.error}`;
   else if (state.phase === "words") {
     summary = state.encoder === "starting" ? "Matching words; meaning search is warming up…" : "Matching words…";
   } else if (state.phase === "wordsOnly") summary = "Words only: meaning search isn't available";

@@ -1,4 +1,4 @@
-// What a search result says, for the panel and the window of DigUp's Windows and Linux shell: its place ("p. 3",
+// What a search result says, for the panel and the window of NeuralSpotlight's Windows and Linux shell: its place ("p. 3",
 // "0:06"), why it matched, its details line, where it is, and the pictures the helper renders for it. The Mac app's
 // Results.swift and Previews.swift are the reference for the words.
 "use strict";

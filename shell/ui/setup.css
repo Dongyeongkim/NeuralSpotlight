@@ -1,5 +1,5 @@
-/* The setup window: DigUp's first launch, and Choose Folders… later. The Mac app's onboarding
-   (Sources/DigUpApp/Onboarding.swift) is the reference; moss and amber are DigUp's colors. */
+/* The setup window: NeuralSpotlight's first launch, and Choose Folders… later. The Mac app's onboarding
+   (Sources/NeuralSpotlightApp/Onboarding.swift) is the reference; moss and amber are NeuralSpotlight's colors. */
 
 :root {
   --amber: #f2a22a;

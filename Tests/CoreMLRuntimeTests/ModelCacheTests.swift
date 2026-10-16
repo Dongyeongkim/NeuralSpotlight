@@ -1,6 +1,6 @@
 import CryptoKit
 import Darwin
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 import Testing
 @testable import CoreMLRuntime

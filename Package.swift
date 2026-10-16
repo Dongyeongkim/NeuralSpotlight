@@ -1,7 +1,7 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// DigUp builds on macOS (the app, the CLI and its helpers) and, since the port, the engine and the CLI on
+// NeuralSpotlight builds on macOS (the app, the CLI and its helpers) and, since the port, the engine and the CLI on
 // Linux and Windows too. The manifest picks each platform's pieces: Core ML on macOS, the C libraries the engine
 // needs where Apple's frameworks aren't there (SQLite, stb, miniz, PDFium: scripts/fetch-vendor.sh puts them in
 // Vendor/), and the app, which is macOS only.
@@ -15,7 +15,7 @@ let portableTargets: [Target] = []
 // Portable builds keep extraction, storage, search and the external embedding-worker protocol.
 // Core ML is unavailable there; no native embedding runtime is bundled.
 #if os(Windows)
-// No rpath on Windows: the PDFium DLL goes beside digup.exe, or on PATH in dev runs.
+// No rpath on Windows: the PDFium DLL goes beside neuralspotlight.exe, or on PATH in dev runs.
 let runpath: [String] = []
 #else
 let runpath = ["-Xlinker", "-rpath", "-Xlinker", "$ORIGIN",
@@ -44,19 +44,19 @@ let portableTargets: [Target] = [
 
 #if os(macOS)
 let runtimeDependencies: [Target.Dependency] = ["CoreMLRuntime"]
-let appProducts: [Product] = [.executable(name: "DigUpApp", targets: ["DigUpApp"])]
+let appProducts: [Product] = [.executable(name: "NeuralSpotlightApp", targets: ["NeuralSpotlightApp"])]
 let appDependencies: [Package.Dependency] = [
     // In-app updates (the app only). build.sh embeds the framework in Contents/Frameworks and signs it.
     .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
 ]
 let appTargets: [Target] = [
-    .target(name: "CoreMLRuntime", dependencies: ["DigUpKit"], exclude: ["FluidUse-LICENSE.txt"]),
+    .target(name: "CoreMLRuntime", dependencies: ["NeuralSpotlightKit"], exclude: ["FluidUse-LICENSE.txt"]),
     .testTarget(name: "CoreMLRuntimeTests", dependencies: ["CoreMLRuntime"], exclude: ["Reference"]),
-    // The menubar + hotkey app. build.sh wraps it into build.noindex/DigUp.app. (The product can't be called
-    // "DigUp": on a case-insensitive disk it would collide with the `digup` CLI binary.)
+    // The menubar + hotkey app. build.sh wraps it into build.noindex/NeuralSpotlight.app. (The product can't be called
+    // "NeuralSpotlight": on a case-insensitive disk it would collide with the `neuralspotlight` CLI binary.)
     .executableTarget(
-        name: "DigUpApp",
-        dependencies: ["DigUpKit", .product(name: "Sparkle", package: "Sparkle")],
+        name: "NeuralSpotlightApp",
+        dependencies: ["NeuralSpotlightKit", .product(name: "Sparkle", package: "Sparkle")],
         swiftSettings: [.defaultIsolation(MainActor.self)],
         linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
     ),
@@ -69,11 +69,11 @@ let appTargets: [Target] = []
 #endif
 
 let package = Package(
-    name: "DigUp",
+    name: "NeuralSpotlight",
     platforms: [.macOS(.v15)],
     products: [
-        .executable(name: "digup", targets: ["digup"]),
-        .library(name: "DigUpKit", targets: ["DigUpKit"]),
+        .executable(name: "neuralspotlight", targets: ["neuralspotlight"]),
+        .library(name: "NeuralSpotlightKit", targets: ["NeuralSpotlightKit"]),
     ] + appProducts,
     dependencies: appDependencies + [
         // 2.25+ introduces a header-only NumKong target that Xcode's SwiftPM linker cannot consume.
@@ -82,13 +82,13 @@ let package = Package(
     targets: portableTargets + [
         // The engine: crawler, extractors, index store, the embedder interface and worker client, search. No UI.
         // Platform/ holds what differs by OS (Apple's frameworks on macOS, the C libraries above elsewhere).
-        .target(name: "DigUpKit", dependencies: engineDependencies + [.product(name: "USearch", package: "USearch")],
+        .target(name: "NeuralSpotlightKit", dependencies: engineDependencies + [.product(name: "USearch", package: "USearch")],
                 linkerSettings: engineLink),
         // Developer CLI: estimate / index / search / status / eval. Doubles as the eval harness, and the app runs it as
         // its indexing helper and its query encoder.
-        .executableTarget(name: "digup", dependencies: ["DigUpKit"] + runtimeDependencies),
+        .executableTarget(name: "neuralspotlight", dependencies: ["NeuralSpotlightKit"] + runtimeDependencies),
         // Pictures/ holds ImageTests' pictures (scripts/testbed/make_test_pictures.swift) and Videos/ VideoTests' video,
         // read by path.
-        .testTarget(name: "DigUpKitTests", dependencies: ["DigUpKit"], exclude: ["Pictures", "Videos"]),
+        .testTarget(name: "NeuralSpotlightKitTests", dependencies: ["NeuralSpotlightKit"], exclude: ["Pictures", "Videos"]),
     ] + appTargets
 )

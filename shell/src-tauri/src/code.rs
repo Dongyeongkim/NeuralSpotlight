@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn offers_folders_that_hold_repositories() {
-        let home = std::env::temp_dir().join(format!("digup-code-home-{}", std::process::id()));
+        let home = std::env::temp_dir().join(format!("neuralspotlight-code-home-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         for repo in ["Codes/app/.git", "tool/.git", "Documents/GitHub/site/.git", "Documents/notes/x/.git",
                      "Downloads/thing/.git", "source/repos/game/.git", ".hidden/repo/.git", "papers/drafts"] {

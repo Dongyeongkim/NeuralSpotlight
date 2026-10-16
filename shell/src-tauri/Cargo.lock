@@ -799,7 +799,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "digup-shell"
+name = "neuralspotlight-shell"
 version = "0.1.0"
 dependencies = [
  "drag",

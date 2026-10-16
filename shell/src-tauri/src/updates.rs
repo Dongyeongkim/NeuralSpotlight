@@ -1,8 +1,8 @@
-//! In-app updates on Windows and Linux (the Mac app has Sparkle: Sources/DigUpApp/Updates.swift). Once a day, unless the
-//! person turned it off (Settings → General), DigUp reads its update feed (`plugins.updater.endpoints` in
-//! tauri.conf.json: updates/latest.json in DigUp's repository, which a release adds last). An update it finds waits
-//! quietly, as on the Mac: "Update to DigUp X…" in the tray menu, a dot on the tray icon, a line in the window's status
-//! bar. Choosing it shows what's new; then DigUp downloads it, checks its signature against the public key in
+//! In-app updates on Windows and Linux (the Mac app has Sparkle: Sources/NeuralSpotlightApp/Updates.swift). Once a day, unless the
+//! person turned it off (Settings → General), NeuralSpotlight reads its update feed (`plugins.updater.endpoints` in
+//! tauri.conf.json: updates/latest.json in NeuralSpotlight's repository, which a release adds last). An update it finds waits
+//! quietly, as on the Mac: "Update to NeuralSpotlight X…" in the tray menu, a dot on the tray icon, a line in the window's status
+//! bar. Choosing it shows what's new; then NeuralSpotlight downloads it, checks its signature against the public key in
 //! tauri.conf.json, installs it and starts again. The Windows installer and the AppImage update themselves; a .deb needs
 //! admin rights to be replaced, so there the update's release page opens instead.
 
@@ -57,11 +57,11 @@ impl Updates {
         let version = &found.as_ref()?.version;
         Some(match *self.phase.lock().unwrap() {
             Phase::Downloading => match *self.percent.lock().unwrap() {
-                Some(percent) => (format!("Downloading DigUp {version}… {percent}%"), false),
-                None => (format!("Downloading DigUp {version}…"), false),
+                Some(percent) => (format!("Downloading NeuralSpotlight {version}… {percent}%"), false),
+                None => (format!("Downloading NeuralSpotlight {version}…"), false),
             },
-            Phase::Installing => (format!("Installing DigUp {version}…"), false),
-            _ => (format!("Update to DigUp {version}…"), true),
+            Phase::Installing => (format!("Installing NeuralSpotlight {version}…"), false),
+            _ => (format!("Update to NeuralSpotlight {version}…"), true),
         })
     }
 }
@@ -103,12 +103,12 @@ fn log(shell: &Shell, line: &str) {
     }
 }
 
-/// The daily check: from a minute after DigUp starts (its own start goes first), then whenever a day has passed since
+/// The daily check: from a minute after NeuralSpotlight starts (its own start goes first), then whenever a day has passed since
 /// the last check. Not in dev runs or debug builds (they'd read the real feed), unless `--debug-update-check` asks for
 /// one check at once (then `--debug-update-install` takes what it finds without asking).
 pub fn start(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
-    log(&shell, &format!("DigUp {} started", app.package_info().version));
+    log(&shell, &format!("NeuralSpotlight {} started", app.package_info().version));
     let debug = shell.options.debug_update_check;
     if !debug && (cfg!(debug_assertions) || shell.dev_run()) {
         return;
@@ -147,7 +147,7 @@ pub async fn check(app: &AppHandle, asked: bool) {
         }
         *phase = Phase::Checking;
     }
-    // Before DigUp exits for the Windows installer: the helpers stop, and any other `digup` it started (a speed check)
+    // Before NeuralSpotlight exits for the Windows installer: the helpers stop, and any other `neuralspotlight` it started (a speed check)
     // ends and is gone, or the installer can't replace their files.
     let exiting = app.clone();
     let result = match app.updater_builder().on_before_exit(move || {
@@ -184,19 +184,19 @@ pub async fn check(app: &AppHandle, asked: bool) {
             *shell.updates.found.lock().unwrap() = None;
             changed(app);
             if asked {
-                tell(app, "You're up to date", &format!("DigUp {} is the newest version.", app.package_info().version));
+                tell(app, "You're up to date", &format!("NeuralSpotlight {} is the newest version.", app.package_info().version));
             }
         }
         Err(error) => {
             log(&shell, &format!("couldn't check: {error}"));
             if asked {
-                tell(app, "Check for Updates", &format!("DigUp couldn't check for updates: {error}"));
+                tell(app, "Check for Updates", &format!("NeuralSpotlight couldn't check for updates: {error}"));
             }
         }
     }
 }
 
-/// "Update to DigUp X…": what's new, then Install and Restart (or, for a .deb, the release page to download it from).
+/// "Update to NeuralSpotlight X…": what's new, then Install and Restart (or, for a .deb, the release page to download it from).
 pub fn offer(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     let Some(update) = shell.updates.found.lock().unwrap().clone() else { return };
@@ -204,7 +204,7 @@ pub fn offer(app: &AppHandle) {
         return;   // already on its way
     }
     let installs = installs_itself();
-    let mut text = format!("DigUp {} is available. You have {}.", update.version, app.package_info().version);
+    let mut text = format!("NeuralSpotlight {} is available. You have {}.", update.version, app.package_info().version);
     if let Some(notes) = update.body.as_deref().map(str::trim).filter(|notes| !notes.is_empty()) {
         text.push_str("\n\n");
         text.push_str(notes);
@@ -217,7 +217,7 @@ pub fn offer(app: &AppHandle) {
     app.clone()
         .dialog()
         .message(text)
-        .title("DigUp Update")
+        .title("NeuralSpotlight Update")
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(yes.into(), no.into()))
         .show(move |yes| {
@@ -234,8 +234,8 @@ pub fn offer(app: &AppHandle) {
         });
 }
 
-/// Downloads the update, checks its signature, installs it and starts DigUp again (on Windows the installer starts it:
-/// DigUp exits as the installer begins).
+/// Downloads the update, checks its signature, installs it and starts NeuralSpotlight again (on Windows the installer starts it:
+/// NeuralSpotlight exits as the installer begins).
 pub async fn install(app: &AppHandle) {
     let shell = app.state::<Arc<Shell>>().inner().clone();
     let Some(update) = shell.updates.found.lock().unwrap().clone() else { return };
@@ -294,7 +294,7 @@ fn failed(app: &AppHandle, problem: &str) {
     *shell.updates.percent.lock().unwrap() = None;
     changed(app);
     if !shell.options.debug_update_install {
-        tell(app, "DigUp Update", &format!("The update didn't go through: {problem}"));
+        tell(app, "NeuralSpotlight Update", &format!("The update didn't go through: {problem}"));
     }
 }
 
@@ -303,14 +303,14 @@ fn tell(app: &AppHandle, title: &str, text: &str) {
 }
 
 /// The GitHub release page of a release's download (…/releases/download/<tag>/<file> → …/releases/tag/<tag>), else
-/// DigUp's releases.
+/// NeuralSpotlight's releases.
 fn release_page(download: &str) -> String {
     if let Some((repository, rest)) = download.split_once("/releases/download/") {
         if let Some((tag, _)) = rest.split_once('/') {
             return format!("{repository}/releases/tag/{tag}");
         }
     }
-    "https://github.com/ARahim3/DigUp/releases".into()
+    "https://github.com/ARahim3/NeuralSpotlight/releases".into()
 }
 
 #[cfg(test)]
@@ -319,8 +319,8 @@ mod tests {
 
     #[test]
     fn release_pages() {
-        assert_eq!(release_page("https://github.com/ARahim3/DigUp/releases/download/v0.7.0-beta.1/DigUp_0.7.0-beta.1_amd64.AppImage"),
-                   "https://github.com/ARahim3/DigUp/releases/tag/v0.7.0-beta.1");
-        assert_eq!(release_page("http://127.0.0.1:8765/DigUp.AppImage"), "https://github.com/ARahim3/DigUp/releases");
+        assert_eq!(release_page("https://github.com/ARahim3/NeuralSpotlight/releases/download/v0.7.0-beta.1/NeuralSpotlight_0.7.0-beta.1_amd64.AppImage"),
+                   "https://github.com/ARahim3/NeuralSpotlight/releases/tag/v0.7.0-beta.1");
+        assert_eq!(release_page("http://127.0.0.1:8765/NeuralSpotlight.AppImage"), "https://github.com/ARahim3/NeuralSpotlight/releases");
     }
 }

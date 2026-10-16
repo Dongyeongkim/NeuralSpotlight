@@ -8,7 +8,7 @@ use gtk::prelude::*;
 #[cfg(target_os = "linux")]
 use std::sync::Mutex;
 
-/// GTK runs on Wayland here: the desktop places DigUp's windows.
+/// GTK runs on Wayland here: the desktop places NeuralSpotlight's windows.
 pub fn active() -> bool {
     #[cfg(target_os = "linux")]
     return gtk::gdk::Display::default().is_some_and(|display| display.backend().is_wayland());

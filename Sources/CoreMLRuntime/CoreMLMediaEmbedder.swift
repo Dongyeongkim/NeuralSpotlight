@@ -5,7 +5,7 @@
 @preconcurrency import AVFoundation
 import CoreGraphics
 import CoreML
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 import ImageIO
 

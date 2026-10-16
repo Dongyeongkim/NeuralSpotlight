@@ -1,5 +1,5 @@
 import CoreML
-import DigUpKit
+import NeuralSpotlightKit
 import Foundation
 
 /// EmbeddingGemma 2's shared text transformer. Core ML may use ANE, GPU and CPU; operator placement is automatic.

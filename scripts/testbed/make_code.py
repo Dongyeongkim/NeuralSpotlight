@@ -1172,7 +1172,7 @@ def main():
                 expect.append(path)
             queries.append({"q": "code: " + query, "expect": expect, "tag": tag})
         with open(eval_path, "w") as file:
-            json.dump({"base": "~/DigUpTestbed/code", "queries": queries}, file, indent=1, ensure_ascii=False)
+            json.dump({"base": "~/NeuralSpotlightTestbed/code", "queries": queries}, file, indent=1, ensure_ascii=False)
             file.write("\n")
         print(f"{len(queries)} queries → {eval_path}")
     print(f"{len(FILES)} files in {root}")

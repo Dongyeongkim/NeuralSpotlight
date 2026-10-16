@@ -1,5 +1,5 @@
-/* The search panel. Sizes and wording follow the Mac app's panel (Sources/DigUpApp/SearchPanelView.swift); the colors
-   are DigUp's (moss and amber) over the system's light or dark. */
+/* The search panel. Sizes and wording follow the Mac app's panel (Sources/NeuralSpotlightApp/SearchPanelView.swift); the colors
+   are NeuralSpotlight's (moss and amber) over the system's light or dark. */
 
 :root {
   --amber: #f2a22a;

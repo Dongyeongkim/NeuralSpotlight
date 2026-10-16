@@ -1,5 +1,5 @@
-//! What the person chose: the folders DigUp searches, what it skips in them, the hotkey, and whether setup is done. A
-//! JSON file in the app's config folder (%APPDATA%\com.abdurrahim.DigUp on Windows, ~/.config/com.abdurrahim.DigUp on
+//! What the person chose: the folders NeuralSpotlight searches, what it skips in them, the hotkey, and whether setup is done. A
+//! JSON file in the app's config folder (%APPDATA%\com.neuralspotlight.app on Windows, ~/.config/com.neuralspotlight.app on
 //! Linux). Launch arguments (`--roots`, `--hotkey`) stand in for it in dev runs.
 
 use crate::hours::Hours;
@@ -37,7 +37,7 @@ pub struct Settings {
     pub tray_click: String,
     /// The daily check for updates was turned off (Settings → General; it's on by default).
     pub update_checks_off: bool,
-    /// When DigUp last checked for updates (seconds since 1970).
+    /// When NeuralSpotlight last checked for updates (seconds since 1970).
     pub update_checked: u64,
 }
 

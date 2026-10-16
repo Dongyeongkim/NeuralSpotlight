@@ -1,4 +1,4 @@
-//! "Index only at set hours" (Settings → Folders), as the Mac app's (DigUpKit's `IndexHours`, the app's
+//! "Index only at set hours" (Settings → Folders), as the Mac app's (NeuralSpotlightKit's `IndexHours`, the app's
 //! `IndexSchedule`): files are read only between two times of day, and what changed meanwhile is picked up when they
 //! begin. Search works at any hour. The shell looks at the clock every half minute, so sleep and clock changes need
 //! nothing of their own.
