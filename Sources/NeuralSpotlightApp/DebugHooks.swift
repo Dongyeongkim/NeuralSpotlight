@@ -263,7 +263,8 @@ enum DebugHooks {
     }
 
     /// `-debugOpen dry|YES`: opens `row` as ↩ would (dry: only logs how).
-    private static func openSelected(_ row: ResultRow?, _ app: AppController, then done: @escaping () -> Void) {
+    private static func openSelected(_ row: ResultRow?, _ app: AppController,
+                                     then done: @escaping @MainActor @Sendable () -> Void) {
         guard let mode = UserDefaults.standard.string(forKey: "debugOpen"), let row else { return done() }
         Opener.dryRun = mode == "dry"
         app.engine.open(row)

@@ -136,7 +136,7 @@ final class ModelDownload {
         if let cached = ModelFiles.cachedCopy(of: file) {
             phase = .verifying
             let partial = folder.appendingPathComponent(file.name + ".partial")
-            DispatchQueue.global(qos: .utility).async {
+            DispatchQueue.global(qos: .utility).async { [self] in
                 try? FileManager.default.createDirectory(at: partial.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(at: partial)
                 let copied = (try? FileManager.default.copyItem(at: cached, to: partial)) != nil
@@ -210,7 +210,7 @@ final class ModelDownload {
             let seconds = Date().timeIntervalSince(fileStarted)
             phase = .verifying
             let started = Date()
-            DispatchQueue.global(qos: .utility).async { [folder] in
+            DispatchQueue.global(qos: .utility).async { [self, folder] in
                 let size = FileFetcher.size(of: partial)
                 let hash = size == file.bytes ? try? ModelFiles.sha256(of: partial) : nil
                 let good = hash == file.sha256
@@ -330,7 +330,7 @@ final class ModelDownload {
         attempt += 1
         retryWork?.cancel()
         phase = .verifying
-        DispatchQueue.global(qos: .utility).async { [folder, picked] in
+        DispatchQueue.global(qos: .utility).async { [self, folder, picked] in
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             var copied: [String] = []
             for (file, url) in picked {
